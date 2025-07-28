@@ -26,3 +26,5 @@
 ![ESP32-C6-LCD-1.47-Board](/images//ESP32-C6-LCD-1.47-Board.png)
 
 ---
+
+- 串口号：`/dev/cu.usbmodem2101`

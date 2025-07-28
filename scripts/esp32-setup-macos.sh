@@ -10,4 +10,4 @@ brew install cmake ninja dfu-util ccache
 repo_root=$(git rev-parse --show-toplevel)
 cd ${repo_root}/esp-idf
 export IDF_GITHUB_ASSETS="dl.espressif.cn/github_assets"
-./install.sh && source ./export.sh
+./install.sh
