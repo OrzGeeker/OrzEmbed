@@ -28,3 +28,7 @@
 ---
 
 - 串口号：`/dev/cu.usbmodem2101`
+
+##  课程学习
+
+- [社区资源](https://www.espressif.com.cn/zh-hans/ecosystem/community-engagement/courses)
