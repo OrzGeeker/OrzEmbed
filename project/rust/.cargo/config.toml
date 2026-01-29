@@ -1,0 +1,14 @@
+[build]
+target = "riscv32imac-esp-espidf"
+
+[env]
+MCU = "esp32c6"
+TARGET = "riscv32imac-esp-espidf"
+
+[unstable]
+build-std = ["std", "panic_abort"]
+build-std-features = ["compiler-builtins-mem"]
+
+[target.riscv32imac-esp-espidf]
+linker = "ldproxy"
+rustflags = ["--cfg", "espidf_time64"]

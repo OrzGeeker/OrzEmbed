@@ -65,6 +65,8 @@ fastlane/test_output
 project/**/build/
 project/**/sdkconfig
 project/**/sdkconfig.old
+project/rust/target/
+project/rust/.embuild/
 project/**/.ninja_deps
 project/**/.ninja_log
 project/**/CMakeCache.txt
