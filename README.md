@@ -72,6 +72,8 @@ source export.sh
 - [Embeded Swift Documentation](https://docs.swift.org/embedded/documentation/embedded/)
 - [Embeded Rust Documentation](https://doc.rust-lang.org/stable/embedded-book/)
 - [ESP-IDF Documentation](https://docs.espressif.com/projects/esp-idf/)
+- [ESP-IDF 组件分析与学习路径](./docs/ESP-IDF-ANALYSIS.md)
+- [ESP-IDF 示例工程学习路径](./docs/ESP-IDF-LEARNING-PATH.md)
 
 ## 社区资源
 
