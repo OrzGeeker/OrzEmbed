@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "target": "riscv32imac-unknown-none-elf",
+  "sdk": "/",
+  "toolchain-bin-dir": "/Users/bytedance/Documents/OrzEmbed/project/rust/.embuild/espressif/tools/riscv32-esp-elf/esp-13.2.0_20230928/riscv32-esp-elf/bin",
+  "linker": "/Users/bytedance/Documents/OrzEmbed/project/rust/.embuild/espressif/tools/riscv32-esp-elf/esp-13.2.0_20230928/riscv32-esp-elf/bin/riscv32-esp-elf-gcc",
+  "extra-swiftc-flags": [
+    "--experimental-swift-embedded",
+    "-target",
+    "riscv32imac-unknown-none-elf"
+  ],
+  "extra-cc-flags": [
+    "-target",
+    "riscv32imac-unknown-none-elf"
+  ]
+}

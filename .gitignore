@@ -67,6 +67,7 @@ project/**/sdkconfig
 project/**/sdkconfig.old
 project/rust/target/
 project/rust/.embuild/
+project/swift/.build/
 project/**/.ninja_deps
 project/**/.ninja_log
 project/**/CMakeCache.txt

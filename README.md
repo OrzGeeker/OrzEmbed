@@ -79,14 +79,16 @@ idf.py flash monitor
 ### Swift 项目
 ```bash
 cd project/swift
-swift build --target riscv32imac-unknown-none-elf
-# 使用适当的工具烧录
+swift build --experimental-swift-embedded --destination ./destination.json --target MyApp
+
+./scripts/esp32c6-swift-build-flash.sh /dev/tty.usbmodemXXXX
 ```
+Swift 交叉编译产物位于 .build/ 对应目录；一键脚本会构建 Swift，并使用 ESP-IDF 的 bootloader/partition table 进行烧录。
 
 ### Rust 项目
 ```bash
+source ./esp-idf/export.sh
 cd project/rust
-source /Users/bytedance/export-esp.sh
 unset IDF_PATH
 export ESP_IDF_VERSION=v5.2.3
 export ESP_IDF_TOOLS_INSTALL_DIR=custom:/Users/bytedance/Documents/OrzEmbed/project/rust/.embuild/espressif
