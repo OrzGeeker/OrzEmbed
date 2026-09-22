@@ -1,6 +1,17 @@
 // 独立计时器:番茄钟 / 倒计时 / 秒表
-// 硬件:ESP32-C6-LCD-1.47(ST7789 172x320 + RGB LED + BOOT 键)
-// 交互:外接开关 GPIO0(等价 BOOT)单击/双击/长按;RGB 状态灯 + 跑马灯 LED
+// 硬件:ESP32-C6-LCD-1.47(ST7789 172x320)
+//   - 4 个开关:   GP0 / GP1 / GP2 / GP3   (对 GND,内部上拉)
+//   - 4 个绿灯:   GP18 / GP19 / GP20 / GP23
+//   - RGB 灯:     GP8 (WS2812)
+// 交互(4 键):
+//   K1(GP0) 短按 = 开始/暂停   长按 = 复位
+//   K2(GP1) 短按 = 切换模式
+//   K3(GP2) 短按 = -1 分钟
+//   K4(GP3) 短按 = +1 分钟
+// 提醒(4 灯):
+//   就绪 = 慢速跑马灯   运行 = 剩余进度条(4→0)
+//   暂停 = 进度条慢闪   结束 = 四灯快闪
+// RGB: 就绪暗蓝 / 运行模式色 / 暂停黄 / 结束红闪
 // 插电即运行,不依赖网络/主机
 #include <stdio.h>
 #include <string.h>
@@ -29,9 +40,16 @@
 #define PIN_LCD_RST  21
 #define PIN_LCD_BL   22
 #define PIN_RGB      8
-#define PIN_BTN      0          // 外接开关 GPIO0 ↔ GND(等价 BOOT)
 #define LCD_H        172
 #define LCD_V        320
+
+// 4 个开关 / 4 个 LED
+static const int BTN_PINS[] = { 0, 1, 2, 3 };            // K1..K4 (GP0..GP3)
+#define NBTN ((int)(sizeof(BTN_PINS) / sizeof(BTN_PINS[0])))
+static const int LED_PINS[] = { 18, 19, 20, 23 };        // 4 个绿色 LED
+#define NLED ((int)(sizeof(LED_PINS) / sizeof(LED_PINS[0])))
+#define LED_ACTIVE_HIGH 1                                // 高电平点亮;低电平点亮改 0
+#define RUN_LED_MARQUEE 0                                // 1=运行时跑马灯,0=运行时进度条
 
 // 颜色 RGB565
 #define C_BLACK   0x0000
@@ -41,7 +59,6 @@
 #define C_GREEN   0x07E0
 #define C_RED     0xF800
 #define C_YELLOW  0xFE00
-#define C_ORANGE  0xFD20
 #define C_BLUE    0x001F
 #define C_PURPLE  0x780F
 #define C_DARK    0x1082
@@ -49,24 +66,29 @@
 static const char *TAG = "timer";
 
 // ---------------- 参数 ----------------
-#define FOCUS_S   (25 * 60)
-#define SHORT_S   (5  * 60)
-#define LONG_S    (15 * 60)
-static const int CD_PRESETS[] = {1, 3, 5, 10, 15, 25, 45, 60};
-#define CD_NPRESET (sizeof(CD_PRESETS)/sizeof(CD_PRESETS[0]))
+#define FOCUS_DEF_MIN 25
+#define SHORT_MIN     5
+#define LBREAK_MIN      15
+#define CD_DEF_MIN    10
 
 typedef enum { M_POMO = 0, M_CD, M_SW, M_NUM } Mode;
 typedef enum { S_IDLE = 0, S_RUN, S_PAUSE, S_DONE } RState;
 typedef enum { PH_FOCUS = 0, PH_SHORT, PH_LONG } Phase;
 
-static Mode   s_mode   = M_POMO;
-static RState s_state  = S_IDLE;
-static Phase  s_phase  = PH_FOCUS;
-static int    s_cycle  = 1;
+static Mode   s_mode  = M_POMO;
+static RState s_state = S_IDLE;
+static Phase  s_phase = PH_FOCUS;
+static int    s_cycle = 1;
 static int64_t s_elapsed_us = 0;
 static int64_t s_last_tick  = 0;
-static int    s_cd_idx = 3;            // 默认 10 分钟
-static bool   s_adjusting = false;
+static int    s_focus_min  = FOCUS_DEF_MIN;   // 可调
+static int    s_cd_min     = CD_DEF_MIN;      // 可调
+static bool   s_adjusting  = false;           // 刚调整过,屏幕上短暂提示
+static int64_t s_adjust_at = 0;
+
+// 前向声明(被前面的函数引用)
+static int64_t total_us(void);
+static void reset_run(void);
 
 // ---------------- LCD ----------------
 static esp_lcd_panel_handle_t s_panel;
@@ -174,7 +196,7 @@ static void lcd_init(void)
     s_ready = true;
 }
 
-// ---------------- RGB (WS2812 @ GPIO8) ----------------
+// ---------------- RGB (WS2812 @ GP8) ----------------
 static rmt_channel_handle_t s_rgb;
 static rmt_encoder_handle_t s_rgb_enc;
 
@@ -203,16 +225,7 @@ static void rgb_set(uint8_t r, uint8_t g, uint8_t b)
     rmt_tx_wait_all_done(s_rgb, 100);
 }
 
-// ---------------- 跑马灯 LED ----------------
-// 四个绿色 LED:GP18 / GP19 / GP20 / GP23(避开 GP9=BOOT,防止输出与按键冲突)
-#define PIN_LED1     18
-#define PIN_LED2     19
-#define PIN_LED3     20
-#define PIN_LED4     23
-#define LED_ACTIVE_HIGH 1       // 高电平点亮;若你的 LED 是低电平点亮改为 0
-static const int LED_PINS[] = { PIN_LED1, PIN_LED2, PIN_LED3, PIN_LED4 };
-#define NLED ((int)(sizeof(LED_PINS) / sizeof(LED_PINS[0])))
-
+// ---------------- 4 个 LED ----------------
 static void led_init(void)
 {
     uint64_t mask = 0;
@@ -222,17 +235,65 @@ static void led_init(void)
     for (int i = 0; i < NLED; i++) gpio_set_level(LED_PINS[i], !LED_ACTIVE_HIGH);
 }
 
-// 跑马灯:单个光点依次点亮
-static void marquee_update(void)
+// 点亮前 lit 颗(0..NLED)
+static void led_bar(int lit)
 {
-    static int idx = 0;
-    static int64_t last = 0;
-    int64_t now = esp_timer_get_time();
-    if (now - last < 150000) return;          // 150ms 一步
-    last = now;
+    for (int i = 0; i < NLED; i++)
+        gpio_set_level(LED_PINS[i], (i < lit) ? LED_ACTIVE_HIGH : !LED_ACTIVE_HIGH);
+}
+static void led_dot(int idx)
+{
     for (int i = 0; i < NLED; i++)
         gpio_set_level(LED_PINS[i], (i == idx) ? LED_ACTIVE_HIGH : !LED_ACTIVE_HIGH);
-    idx = (idx + 1) % NLED;
+}
+
+// 当前"剩余"对应的灯数(0..NLED)
+static int led_level(void)
+{
+    if (s_mode == M_SW) {
+        int sec = (int)((s_elapsed_us / 1000000) % 60);
+        return (sec * NLED) / 60;                 // 秒表:每分钟填充
+    }
+    int64_t tot = total_us();
+    if (tot <= 0) return 0;
+    int64_t rem = tot - s_elapsed_us;
+    if (rem < 0) rem = 0;
+    int lit = (int)((rem * NLED + tot - 1) / tot);   // 向上取整
+    if (lit < 0) lit = 0;
+    if (lit > NLED) lit = NLED;
+    return lit;
+}
+
+// 状态化提醒
+static void led_update(void)
+{
+    static int64_t last = 0;
+    static int step = 0;
+    static bool phase = false;
+    int64_t now = esp_timer_get_time();
+    int64_t iv = (s_state == S_DONE)  ? 125000 :     // 快闪
+                 (s_state == S_PAUSE) ? 500000 :     // 慢闪
+                 (s_state == S_RUN)   ? 250000 : 400000;
+    if (now - last < iv) return;
+    last = now;
+    phase = !phase;
+
+#if RUN_LED_MARQUEE
+    bool marquee = (s_state == S_RUN);
+#else
+    bool marquee = false;
+#endif
+
+    if (s_state == S_IDLE || s_adjusting || marquee) {
+        step = (step + 1) % NLED;                 // 慢速跑马灯
+        led_dot(step);
+    } else if (s_state == S_RUN) {
+        led_bar(led_level());
+    } else if (s_state == S_PAUSE) {
+        led_bar(phase ? led_level() : 0);
+    } else {                                       // S_DONE
+        led_bar(phase ? NLED : 0);
+    }
 }
 
 // ---------------- NVS ----------------
@@ -240,64 +301,115 @@ static void nvs_load(void)
 {
     nvs_handle_t h;
     if (nvs_open("timer", NVS_READONLY, &h) == ESP_OK) {
-        int32_t v = 3;
-        if (nvs_get_i32(h, "cd_idx", &v) == ESP_OK && v >= 0 && v < (int)CD_NPRESET) s_cd_idx = v;
+        int32_t v;
+        if (nvs_get_i32(h, "focus_min", &v) == ESP_OK && v >= 1 && v <= 180) s_focus_min = v;
+        if (nvs_get_i32(h, "cd_min", &v) == ESP_OK && v >= 1 && v <= 180) s_cd_min = v;
         nvs_close(h);
     }
 }
-static void nvs_save_cd(void)
+static void nvs_save(void)
 {
     nvs_handle_t h;
     if (nvs_open("timer", NVS_READWRITE, &h) == ESP_OK) {
-        nvs_set_i32(h, "cd_idx", s_cd_idx);
+        nvs_set_i32(h, "focus_min", s_focus_min);
+        nvs_set_i32(h, "cd_min", s_cd_min);
         nvs_commit(h);
         nvs_close(h);
     }
 }
 
-// ---------------- 按键手势 ----------------
-enum { EV_NONE = 0, EV_SINGLE, EV_DOUBLE, EV_LONG };
-static bool s_btn_down;
-static int64_t s_press_us;
-static int s_clicks;
-static int64_t s_last_click_us;
+// ---------------- 4 个按键 ----------------
+static bool s_bdown[NBTN];
+static int64_t s_bpress[NBTN];
 
-static int btn_poll(void)
+static void toggle_start_pause(void)
 {
-    // 按下 = 0;外接开关 GPIO0
-    int lvl = (gpio_get_level(PIN_BTN) == 0) ? 0 : 1;
+    switch (s_state) {
+        case S_IDLE:  s_state = S_RUN; break;
+        case S_RUN:   s_state = S_PAUSE; break;
+        case S_PAUSE: s_state = S_RUN; break;
+        case S_DONE:
+            if (s_mode == M_CD) { s_state = S_IDLE; s_elapsed_us = 0; }
+            else                { s_state = S_RUN;  s_elapsed_us = 0; }
+            break;
+    }
+}
+static void next_mode(void)
+{
+    s_mode = (Mode)((s_mode + 1) % M_NUM);
+    reset_run();
+}
+static void adjust_minutes(int d)
+{
+    if (s_mode == M_CD) {
+        s_cd_min += d;
+        if (s_cd_min < 1) s_cd_min = 1;
+        if (s_cd_min > 180) s_cd_min = 180;
+        if (s_state == S_IDLE) s_elapsed_us = 0;
+        nvs_save();
+        s_adjusting = true;
+        s_adjust_at = esp_timer_get_time();
+    } else if (s_mode == M_POMO && s_phase == PH_FOCUS) {
+        s_focus_min += d;
+        if (s_focus_min < 1) s_focus_min = 1;
+        if (s_focus_min > 180) s_focus_min = 180;
+        if (s_state == S_IDLE) s_elapsed_us = 0;
+        nvs_save();
+        s_adjusting = true;
+        s_adjust_at = esp_timer_get_time();
+    }
+}
+
+static void on_button(int idx, bool is_long)
+{
+    ESP_LOGI(TAG, "K%d %s", idx + 1, is_long ? "LONG" : "short");
+    switch (idx) {
+        case 0:                                   // K1: 开始/暂停;长按复位
+            if (is_long) reset_run();
+            else toggle_start_pause();
+            break;
+        case 1:                                   // K2: 切换模式
+            if (!is_long) next_mode();
+            break;
+        case 2:                                   // K3: -1 分钟
+            if (!is_long) adjust_minutes(-1);
+            break;
+        case 3:                                   // K4: +1 分钟
+            if (!is_long) adjust_minutes(+1);
+            break;
+    }
+}
+
+static void btn_scan(void)
+{
     int64_t now = esp_timer_get_time();
-    if (lvl == 0 && !s_btn_down) {
-        s_btn_down = true;
-        s_press_us = now;
-    } else if (lvl == 1 && s_btn_down) {
-        s_btn_down = false;
-        int64_t d = now - s_press_us;
-        if (d >= 1200000) { s_clicks = 0; return EV_LONG; }   // 长按 1.2s
-        s_clicks++;
-        s_last_click_us = now;
+    for (int i = 0; i < NBTN; i++) {
+        int lvl = gpio_get_level(BTN_PINS[i]);    // 按下 = 0
+        if (lvl == 0 && !s_bdown[i]) {
+            s_bdown[i] = true;
+            s_bpress[i] = now;
+        } else if (lvl == 1 && s_bdown[i]) {
+            s_bdown[i] = false;
+            int64_t d = now - s_bpress[i];
+            if (d >= 800000)      on_button(i, true);       // 长按 0.8s
+            else if (d >= 30000)  on_button(i, false);      // 去抖 30ms
+        }
     }
-    if (s_clicks > 0 && (now - s_last_click_us) > 320000) {   // 双击窗口 320ms
-        int n = s_clicks;
-        s_clicks = 0;
-        return (n == 1) ? EV_SINGLE : EV_DOUBLE;
-    }
-    return EV_NONE;
 }
 
 // ---------------- 计时逻辑 ----------------
 static int phase_seconds(void)
 {
     switch (s_phase) {
-        case PH_FOCUS: return FOCUS_S;
-        case PH_SHORT: return SHORT_S;
-        default:       return LONG_S;
+        case PH_FOCUS: return s_focus_min * 60;
+        case PH_SHORT: return SHORT_MIN * 60;
+        default:       return LBREAK_MIN * 60;
     }
 }
 static int64_t total_us(void)
 {
     if (s_mode == M_POMO) return (int64_t)phase_seconds() * 1000000;
-    if (s_mode == M_CD)   return (int64_t)CD_PRESETS[s_cd_idx] * 60 * 1000000;
+    if (s_mode == M_CD)   return (int64_t)s_cd_min * 60 * 1000000;
     return 0;
 }
 static const char *mode_name(void)
@@ -314,35 +426,8 @@ static void reset_run(void)
 {
     s_state = S_IDLE;
     s_elapsed_us = 0;
+    s_adjusting = false;
     if (s_mode == M_POMO) { s_phase = PH_FOCUS; s_cycle = 1; }
-}
-
-static void on_event(int ev)
-{
-    if (ev == EV_DOUBLE) {
-        if (s_adjusting) return;
-        s_mode = (Mode)((s_mode + 1) % M_NUM);
-        reset_run();
-        return;
-    }
-    if (ev == EV_LONG) {
-        if (s_adjusting) { s_adjusting = false; nvs_save_cd(); return; }
-        if (s_mode == M_CD && s_state == S_IDLE && s_elapsed_us == 0) { s_adjusting = true; return; }
-        reset_run();
-        return;
-    }
-    if (ev == EV_SINGLE) {
-        if (s_adjusting) { s_cd_idx = (s_cd_idx + 1) % (int)CD_NPRESET; return; }
-        switch (s_state) {
-            case S_IDLE:  s_state = S_RUN; break;
-            case S_RUN:   s_state = S_PAUSE; break;
-            case S_PAUSE: s_state = S_RUN; break;
-            case S_DONE:
-                if (s_mode == M_CD) { s_state = S_IDLE; s_elapsed_us = 0; }
-                else                { s_state = S_RUN;  s_elapsed_us = 0; }
-                break;
-        }
-    }
 }
 
 static void tick_timer(void)
@@ -354,7 +439,7 @@ static void tick_timer(void)
     if ((s_mode == M_POMO || s_mode == M_CD) && s_state == S_RUN && s_elapsed_us >= total_us()) {
         s_elapsed_us = total_us();
         s_state = S_DONE;
-        if (s_mode == M_POMO) {                       // 自动切换到下一阶段并待启动
+        if (s_mode == M_POMO) {
             if (s_phase == PH_FOCUS) s_phase = (s_cycle % 4 == 0) ? PH_LONG : PH_SHORT;
             else { s_phase = PH_FOCUS; s_cycle++; }
             s_elapsed_us = 0;
@@ -366,8 +451,7 @@ static void fmt_clock(int64_t ms, char *out, size_t n)
 {
     if (ms < 0) ms = 0;
     int t = (int)(ms / 1000);
-    int m = t / 60, s = t % 60;
-    snprintf(out, n, "%02d:%02d", m, s);
+    snprintf(out, n, "%02d:%02d", t / 60, t % 60);
 }
 static void fmt_clock_t(int64_t ms, char *out, size_t n)
 {
@@ -380,7 +464,7 @@ static void fmt_clock_t(int64_t ms, char *out, size_t n)
 }
 static const char *state_text(void)
 {
-    if (s_adjusting) return "SET MINUTES";
+    if (s_adjusting && s_state == S_IDLE) return "SET";
     switch (s_state) {
         case S_IDLE:  return "READY";
         case S_RUN:   return "RUN";
@@ -397,7 +481,7 @@ static char s_last_info[24] = "\xff";
 static float s_last_frac = -2;
 static int s_last_cycle = -1, s_last_phase = -1;
 
-#define C_FRAME  0x2965          // 细边框 / 分隔线(暗灰蓝)
+#define C_FRAME  0x2965          // 细边框 / 分隔线
 #define MARGIN   12
 #define Y_TITLE  14
 #define Y_SEP    36
@@ -407,7 +491,7 @@ static int s_last_cycle = -1, s_last_phase = -1;
 #define Y_STATUS 170
 #define Y_INFO   198
 #define Y_DOTS   230
-#define Y_HINT   286
+#define Y_HINT   276
 
 static void hline(int x, int y, int w, uint16_t c) { fill_rect(x, y, w, 1, c); }
 static void frame(int x, int y, int w, int h, uint16_t c)
@@ -425,9 +509,9 @@ static void draw_dots(void)
     int x = (LCD_H - total) / 2;
     for (int i = 0; i < n; i++) {
         uint16_t c;
-        if (i < s_cycle - 1)        c = C_GREEN;        // 已完成轮次
-        else if (i == s_cycle - 1)  c = mode_color();   // 当前轮次
-        else                        c = C_DARK;
+        if (i < s_cycle - 1)       c = C_GREEN;
+        else if (i == s_cycle - 1) c = mode_color();
+        else                       c = C_DARK;
         fill_rect(x + i * (sz + gap), Y_DOTS, sz, sz, c);
     }
 }
@@ -435,20 +519,13 @@ static void draw_dots(void)
 static void draw_static(void)
 {
     fill_rect(0, 0, LCD_H, LCD_V, C_BLACK);
-    frame(0, 0, LCD_H, LCD_V, C_FRAME);                   // 外框:可判断四周是否被裁切
+    frame(0, 0, LCD_H, LCD_V, C_FRAME);
     draw_text_c(Y_TITLE, mode_name(), C_CYAN, C_BLACK, 2);
     hline(MARGIN + 6, Y_SEP, LCD_H - 2 * (MARGIN + 6), C_FRAME);
-    fill_rect(0, Y_HINT - 8, LCD_H, LCD_V - (Y_HINT - 8), C_BLACK);
-    if (s_mode == M_SW) {
-        draw_text_c(Y_HINT,      "1x  start / pause", C_GRAY, C_BLACK, 1);
-        draw_text_c(Y_HINT + 14, "2x  mode    hold  reset", C_GRAY, C_BLACK, 1);
-    } else if (s_mode == M_CD) {
-        draw_text_c(Y_HINT,      "1x  start / pause", C_GRAY, C_BLACK, 1);
-        draw_text_c(Y_HINT + 14, "2x mode   hold: edit / reset", C_GRAY, C_BLACK, 1);
-    } else {
-        draw_text_c(Y_HINT,      "1x  start / pause", C_GRAY, C_BLACK, 1);
-        draw_text_c(Y_HINT + 14, "2x mode    hold: reset", C_GRAY, C_BLACK, 1);
-    }
+    fill_rect(0, Y_HINT - 6, LCD_H, LCD_V - (Y_HINT - 6), C_BLACK);
+    draw_text_c(Y_HINT,      "K1  start / pause", C_GRAY, C_BLACK, 1);
+    draw_text_c(Y_HINT + 13, "K2 mode   K3 -   K4 +", C_GRAY, C_BLACK, 1);
+    draw_text_c(Y_HINT + 26, "hold K1 = reset", C_GRAY, C_BLACK, 1);
 }
 
 static void render(void)
@@ -464,7 +541,6 @@ static void render(void)
         s_last_phase = -1;
     }
 
-    // 大号时间(番茄钟/倒计时用 scale5;秒表含十分位用 scale4)
     char t[16];
     int tscale = (s_mode == M_SW) ? 4 : 5;
     if (s_mode == M_SW) {
@@ -481,7 +557,6 @@ static void render(void)
         strcpy(s_last_time, t);
     }
 
-    // 进度条(带边框)
     float frac;
     if (s_mode == M_SW) {
         frac = (float)((s_elapsed_us / 1000000) % 60) / 60.0f;
@@ -501,11 +576,10 @@ static void render(void)
         s_last_frac = frac;
     }
 
-    // 状态
     const char *st = state_text();
     if (strcmp(st, s_last_status) != 0) {
         uint16_t c = C_GRAY;
-        if (s_adjusting) c = C_PURPLE;
+        if (s_adjusting && s_state == S_IDLE) c = C_PURPLE;
         else if (s_state == S_RUN) c = mode_color();
         else if (s_state == S_DONE) c = C_RED;
         else if (s_state == S_PAUSE) c = C_YELLOW;
@@ -514,15 +588,12 @@ static void render(void)
         strcpy(s_last_status, st);
     }
 
-    // 信息行
     char info[24];
-    if (s_adjusting) {
-        snprintf(info, sizeof info, "PRESET %d MIN", CD_PRESETS[s_cd_idx]);
-    } else if (s_mode == M_POMO) {
+    if (s_mode == M_POMO) {
         const char *ph = s_phase == PH_FOCUS ? "FOCUS" : (s_phase == PH_SHORT ? "S-BREAK" : "L-BREAK");
         snprintf(info, sizeof info, "%s %d/4", ph, s_cycle);
     } else if (s_mode == M_CD) {
-        snprintf(info, sizeof info, "PRESET %d MIN", CD_PRESETS[s_cd_idx]);
+        snprintf(info, sizeof info, "%d MIN", s_cd_min);
     } else {
         snprintf(info, sizeof info, "ELAPSED");
     }
@@ -532,7 +603,6 @@ static void render(void)
         strcpy(s_last_info, info);
     }
 
-    // 番茄钟轮次指示点
     if (s_mode == M_POMO && (s_cycle != s_last_cycle || s_phase != s_last_phase)) {
         draw_dots();
         s_last_cycle = s_cycle;
@@ -543,15 +613,11 @@ static void render(void)
 // ---------------- RGB 指示 ----------------
 static void rgb_update(void)
 {
-    static int64_t last_blink;
     static uint8_t r, g, b;
     uint8_t nr, ng, nb;
     if (s_state == S_DONE) {
-        int64_t now = esp_timer_get_time();
-        bool on = ((now / 250000) & 1);
+        bool on = ((esp_timer_get_time() / 250000) & 1);
         nr = on ? 60 : 0; ng = 0; nb = 0;
-    } else if (s_adjusting) {
-        nr = 30; ng = 0; nb = 40;
     } else if (s_state == S_RUN) {
         if (s_mode == M_POMO && s_phase == PH_FOCUS) { nr = 50; ng = 0; nb = 0; }
         else if (s_mode == M_POMO) { nr = 0; ng = 50; nb = 0; }
@@ -559,6 +625,8 @@ static void rgb_update(void)
         else { nr = 0; ng = 50; nb = 0; }
     } else if (s_state == S_PAUSE) {
         nr = 40; ng = 40; nb = 0;
+    } else if (s_adjusting) {
+        nr = 30; ng = 0; nb = 40;
     } else {
         nr = 0; ng = 0; nb = 16;      // IDLE 暗蓝
     }
@@ -566,15 +634,15 @@ static void rgb_update(void)
         r = nr; g = ng; b = nb;
         rgb_set(r, g, b);
     }
-    (void)last_blink;
 }
 
 // ---------------- main ----------------
 void app_main(void)
 {
     ESP_LOGI(TAG, "== standalone timer (pomodoro/countdown/stopwatch) ==");
-    ESP_LOGI(TAG, "button=GPIO%d; LEDs=GPIO%d/%d/%d/%d (marquee)",
-             PIN_BTN, LED_PINS[0], LED_PINS[1], LED_PINS[2], LED_PINS[3]);
+    ESP_LOGI(TAG, "buttons K1-K4 = GP%d/%d/%d/%d; LEDs = GP%d/%d/%d/%d",
+             BTN_PINS[0], BTN_PINS[1], BTN_PINS[2], BTN_PINS[3],
+             LED_PINS[0], LED_PINS[1], LED_PINS[2], LED_PINS[3]);
     esp_err_t err = nvs_flash_init();
     if (err == ESP_ERR_NVS_NO_FREE_PAGES || err == ESP_ERR_NVS_NEW_VERSION_FOUND) {
         nvs_flash_erase(); nvs_flash_init();
@@ -582,25 +650,28 @@ void app_main(void)
     nvs_load();
     lcd_init();
     rgb_init();
-    gpio_config_t bc = { .pin_bit_mask = 1ULL << PIN_BTN, .mode = GPIO_MODE_INPUT,
+    led_init();
+    gpio_config_t bc = { .pin_bit_mask = 0, .mode = GPIO_MODE_INPUT,
                          .pull_up_en = GPIO_PULLUP_ENABLE, .pull_down_en = GPIO_PULLDOWN_DISABLE,
                          .intr_type = GPIO_INTR_DISABLE };
+    for (int i = 0; i < NBTN; i++) bc.pin_bit_mask |= (1ULL << BTN_PINS[i]);
     gpio_config(&bc);
-    led_init();
+
     s_last_tick = esp_timer_get_time();
     draw_static();
     render();
 
     while (1) {
-        int ev = btn_poll();
-        if (ev) {
-            ESP_LOGI(TAG, "event=%d mode=%d state=%d", ev, s_mode, s_state);
-            on_event(ev);
-        }
+        btn_scan();
         tick_timer();
+        // 调整提示 1.5s 后消失
+        if (s_adjusting && s_adjust_at && esp_timer_get_time() - s_adjust_at > 1500000) {
+            s_adjusting = false;
+            s_adjust_at = 0;
+        }
         render();
         rgb_update();
-        marquee_update();
-        vTaskDelay(pdMS_TO_TICKS(25));
+        led_update();
+        vTaskDelay(pdMS_TO_TICKS(20));
     }
 }
