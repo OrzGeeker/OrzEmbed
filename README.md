@@ -39,11 +39,13 @@ OrzEmbed/
 ├── images/          # 开发板图片和示意图
 ├── project/         # 多语言项目示例
 │   ├── c/           # C 语言项目示例
+│   ├── hwtest/      # 板级自动自检固件(一条命令跑完所有外设)
 │   ├── swift/       # Swift 语言项目示例(ESP-IDF + idf_swift)
 │   └── rust/        # Rust 语言项目示例
 ├── scripts/         # 脚本工具
 │   ├── esp32-setup-macos.sh            # macOS 环境设置脚本
 │   ├── esp32c6-build-flash.sh          # C 工程构建/烧录/监视
+│   ├── esp32c6-hwtest.sh               # 板级自动自检(编译+烧录+解析 PASS/FAIL)
 │   ├── esp32c6-rust-build-flash.sh     # Rust 工程构建/烧录
 │   └── esp32c6-swift-build-flash.sh    # Swift 工程构建/烧录
 └── README.md        # 项目说明文档
@@ -67,6 +69,16 @@ OrzEmbed/
 - **项目配置**：`Cargo.toml`、`rust-toolchain.toml`（nightly）、`.cargo/config.toml`
 - **主代码**：`src/main.rs` - GPIO 翻转与日志输出
 - **功能**：使用 esp-idf-svc / esp-idf-hal（RISC-V，上游 nightly + `build-std`）开发
+
+### 4. 板级自检固件 (`project/hwtest/`)
+- 上电自动跑完 **芯片 / Flash / NVS / SD / LCD / RGB / GPIO / WiFi** 并打印 `PASS/FAIL` 汇总;
+- GPIO 部分会自动检测**排针间的锡桥/短路**,`--probe` 模式可用引导方式验证**虚焊/开路**;
+- 配套脚本一条命令完成编译+烧录+采集+解析:
+
+```bash
+./scripts/esp32c6-hwtest.sh            # 自动自检(全部通过退出码 0,有 FAIL 退出码 1)
+./scripts/esp32c6-hwtest.sh --probe    # 追加引导式导通/虚焊探测
+```
 
 ## 使用方法
 
@@ -124,6 +136,9 @@ cargo install cargo-espflash --locked          # 仅烧录需要
 
 # Swift:构建并烧录 project/swift
 ./scripts/esp32c6-swift-build-flash.sh [/dev/tty.usbmodemXXXX]
+
+# 板级自动自检(编译+烧录 project/hwtest 并解析结果)
+./scripts/esp32c6-hwtest.sh [/dev/cu.usbmodemXXXX] [--probe]
 ```
 
 ### 3. 版本约定

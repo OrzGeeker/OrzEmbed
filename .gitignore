@@ -96,3 +96,6 @@ project/**/log/idf_py_stderr_output_*
 *.elf
 *.bin
 *.map
+
+# macOS
+.DS_Store
