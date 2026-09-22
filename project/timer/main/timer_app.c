@@ -30,6 +30,7 @@
 #include "esp_lcd_panel_vendor.h"
 #include "esp_lcd_panel_ops.h"
 #include "font6x9.h"
+#include "cjk16.h"
 
 // ---------------- 引脚 ----------------
 #define PIN_MOSI     6
@@ -161,6 +162,88 @@ static void draw_text_c(int y0, const char *s, uint16_t fg, uint16_t bg, int sca
     int x = (LCD_H - w) / 2;
     if (x < 0) x = 0;
     draw_text(x, y0, s, fg, bg, scale);
+}
+
+// ---------------- 中文/英文混排绘制 -------------
+static int utf8_next(const char *s, uint32_t *cp)
+{
+    const unsigned char *p = (const unsigned char *)s;
+    if (p[0] < 0x80) { *cp = p[0]; return 1; }
+    if ((p[0] & 0xE0) == 0xC0) { *cp = ((p[0] & 0x1F) << 6) | (p[1] & 0x3F); return 2; }
+    if ((p[0] & 0xF0) == 0xE0) { *cp = ((p[0] & 0x0F) << 12) | ((p[1] & 0x3F) << 6) | (p[2] & 0x3F); return 3; }
+    if ((p[0] & 0xF8) == 0xF0) {
+        *cp = ((p[0] & 0x07) << 18) | ((p[1] & 0x3F) << 12) | ((p[2] & 0x3F) << 6) | (p[3] & 0x3F);
+        return 4;
+    }
+    *cp = '?'; return 1;
+}
+static const cjk_glyph_t *cjk_lookup(uint32_t cp)
+{
+    for (int i = 0; i < CJK16_COUNT; i++) if (cjk16[i].cp == cp) return &cjk16[i];
+    return NULL;
+}
+static int mixed_width(const char *s, int scale)
+{
+    int w = 0;
+    while (*s) { uint32_t cp; int n = utf8_next(s, &cp); w += (cp < 0x80 ? FONT_W : CJK_W) * scale; s += n; }
+    return w;
+}
+static void draw_mixed(int x0, int y0, const char *s, uint16_t fg, uint16_t bg, int scale)
+{
+    if (!s_ready) return;
+    int w = mixed_width(s, scale);
+    if (x0 + w > LCD_H) w = LCD_H - x0;
+    int h = CJK_H * scale;
+    if (w <= 0 || y0 < 0 || y0 + h > LCD_V) return;
+    static uint16_t buf[LCD_H * CJK_H * 2];
+    for (int i = 0; i < w * h; i++) buf[i] = bg;
+    int pen = x0;
+    const char *p = s;
+    while (*p) {
+        uint32_t cp; int nb = utf8_next(p, &cp);
+        if (cp < 0x80) {
+            const uint8_t *g = font6x9[(cp >= 32 && cp <= 126) ? (int)cp - 32 : 0];
+            int oy = ((CJK_H - FONT_H) / 2) * scale;      // ASCII 在行内垂直居中
+            for (int r = 0; r < FONT_H; r++) {
+                uint8_t bits = g[r];
+                if (!bits) continue;
+                for (int col = 0; col < FONT_W; col++) {
+                    if (!(bits & (1 << (FONT_W - 1 - col)))) continue;
+                    for (int dy = 0; dy < scale; dy++)
+                        for (int dx = 0; dx < scale; dx++) {
+                            int X = pen + col * scale + dx - x0, Y = oy + r * scale + dy;
+                            if (X >= 0 && X < w && Y >= 0 && Y < h) buf[Y * w + X] = fg;
+                        }
+                }
+            }
+            pen += FONT_W * scale;
+        } else {
+            const cjk_glyph_t *g = cjk_lookup(cp);
+            for (int r = 0; r < CJK_H; r++) {
+                uint16_t bits = g ? g->rows[r] : 0;
+                if (!bits) continue;
+                for (int col = 0; col < CJK_W; col++) {
+                    if (!(bits & (1 << (CJK_W - 1 - col)))) continue;
+                    for (int dy = 0; dy < scale; dy++)
+                        for (int dx = 0; dx < scale; dx++) {
+                            int X = pen + col * scale + dx - x0, Y = r * scale + dy;
+                            if (X >= 0 && X < w && Y >= 0 && Y < h) buf[Y * w + X] = fg;
+                        }
+                }
+            }
+            pen += CJK_W * scale;
+        }
+        p += nb;
+    }
+    esp_lcd_panel_draw_bitmap(s_panel, x0, y0, x0 + w, y0 + h, buf);
+    lcd_wait();
+}
+static void draw_mixed_c(int y0, const char *s, uint16_t fg, uint16_t bg, int scale)
+{
+    int w = mixed_width(s, scale);
+    int x = (LCD_H - w) / 2;
+    if (x < 0) x = 0;
+    draw_mixed(x, y0, s, fg, bg, scale);
 }
 
 static void lcd_init(void)
@@ -414,7 +497,7 @@ static int64_t total_us(void)
 }
 static const char *mode_name(void)
 {
-    return s_mode == M_POMO ? "POMODORO" : (s_mode == M_CD ? "COUNTDOWN" : "STOPWATCH");
+    return s_mode == M_POMO ? "番茄钟" : (s_mode == M_CD ? "倒计时" : "秒表");
 }
 static uint16_t mode_color(void)
 {
@@ -464,12 +547,12 @@ static void fmt_clock_t(int64_t ms, char *out, size_t n)
 }
 static const char *state_text(void)
 {
-    if (s_adjusting && s_state == S_IDLE) return "SET";
+    if (s_adjusting && s_state == S_IDLE) return "调整";
     switch (s_state) {
-        case S_IDLE:  return "READY";
-        case S_RUN:   return "RUN";
-        case S_PAUSE: return "PAUSE";
-        default:      return "DONE";
+        case S_IDLE:  return "就绪";
+        case S_RUN:   return "运行";
+        case S_PAUSE: return "暂停";
+        default:      return "结束";
     }
 }
 
@@ -484,14 +567,14 @@ static int s_last_cycle = -1, s_last_phase = -1;
 #define C_FRAME  0x2965          // 细边框 / 分隔线
 #define MARGIN   12
 #define Y_TITLE  14
-#define Y_SEP    36
-#define Y_TIME   70
+#define Y_SEP    52
+#define Y_TIME   72
 #define Y_BAR    140
 #define BAR_H    12
-#define Y_STATUS 170
-#define Y_INFO   198
-#define Y_DOTS   230
-#define Y_HINT   276
+#define Y_STATUS 164
+#define Y_INFO   204
+#define Y_DOTS   228
+#define Y_HINT   264
 
 static void hline(int x, int y, int w, uint16_t c) { fill_rect(x, y, w, 1, c); }
 static void frame(int x, int y, int w, int h, uint16_t c)
@@ -520,12 +603,12 @@ static void draw_static(void)
 {
     fill_rect(0, 0, LCD_H, LCD_V, C_BLACK);
     frame(0, 0, LCD_H, LCD_V, C_FRAME);
-    draw_text_c(Y_TITLE, mode_name(), C_CYAN, C_BLACK, 2);
+    draw_mixed_c(Y_TITLE, mode_name(), C_CYAN, C_BLACK, 2);
     hline(MARGIN + 6, Y_SEP, LCD_H - 2 * (MARGIN + 6), C_FRAME);
     fill_rect(0, Y_HINT - 6, LCD_H, LCD_V - (Y_HINT - 6), C_BLACK);
-    draw_text_c(Y_HINT,      "K1  start / pause", C_GRAY, C_BLACK, 1);
-    draw_text_c(Y_HINT + 13, "K2 mode   K3 -   K4 +", C_GRAY, C_BLACK, 1);
-    draw_text_c(Y_HINT + 26, "hold K1 = reset", C_GRAY, C_BLACK, 1);
+    draw_mixed_c(Y_HINT,      "K1 开始/暂停", C_GRAY, C_BLACK, 1);
+    draw_mixed_c(Y_HINT + 16, "K2 模式 K3 减 K4 加", C_GRAY, C_BLACK, 1);
+    draw_mixed_c(Y_HINT + 32, "长按 K1 复位", C_GRAY, C_BLACK, 1);
 }
 
 static void render(void)
@@ -583,23 +666,23 @@ static void render(void)
         else if (s_state == S_RUN) c = mode_color();
         else if (s_state == S_DONE) c = C_RED;
         else if (s_state == S_PAUSE) c = C_YELLOW;
-        fill_rect(0, Y_STATUS, LCD_H, FONT_H * 2, C_BLACK);
-        draw_text_c(Y_STATUS, st, c, C_BLACK, 2);
+        fill_rect(0, Y_STATUS, LCD_H, CJK_H * 2, C_BLACK);
+        draw_mixed_c(Y_STATUS, st, c, C_BLACK, 2);
         strcpy(s_last_status, st);
     }
 
     char info[24];
     if (s_mode == M_POMO) {
-        const char *ph = s_phase == PH_FOCUS ? "FOCUS" : (s_phase == PH_SHORT ? "S-BREAK" : "L-BREAK");
+        const char *ph = s_phase == PH_FOCUS ? "专注" : (s_phase == PH_SHORT ? "短休" : "长休");
         snprintf(info, sizeof info, "%s %d/4", ph, s_cycle);
     } else if (s_mode == M_CD) {
-        snprintf(info, sizeof info, "%d MIN", s_cd_min);
+        snprintf(info, sizeof info, "%d 分", s_cd_min);
     } else {
-        snprintf(info, sizeof info, "ELAPSED");
+        snprintf(info, sizeof info, "计时");
     }
     if (strcmp(info, s_last_info) != 0) {
-        fill_rect(0, Y_INFO, LCD_H, FONT_H * 2, C_BLACK);
-        draw_text_c(Y_INFO, info, C_GRAY, C_BLACK, 2);
+        fill_rect(0, Y_INFO, LCD_H, CJK_H, C_BLACK);
+        draw_mixed_c(Y_INFO, info, C_GRAY, C_BLACK, 1);
         strcpy(s_last_info, info);
     }
 
