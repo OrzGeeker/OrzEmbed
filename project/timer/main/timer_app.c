@@ -30,6 +30,7 @@
 #define PIN_LCD_BL   22
 #define PIN_RGB      8
 #define PIN_BTN      9
+#define PIN_BTN2     0          // 外接开关(排针 GPIO0 ↔ GND),与 BOOT 功能相同
 #define LCD_H        172
 #define LCD_V        320
 
@@ -232,7 +233,8 @@ static int64_t s_last_click_us;
 
 static int btn_poll(void)
 {
-    int lvl = gpio_get_level(PIN_BTN);       // 按下 = 0
+    // 按下 = 0;BOOT(GPIO9) 或 外接开关(GPIO0) 任一按下均有效
+    int lvl = (gpio_get_level(PIN_BTN) == 0 || gpio_get_level(PIN_BTN2) == 0) ? 0 : 1;
     int64_t now = esp_timer_get_time();
     if (lvl == 0 && !s_btn_down) {
         s_btn_down = true;
@@ -540,6 +542,7 @@ static void rgb_update(void)
 void app_main(void)
 {
     ESP_LOGI(TAG, "== standalone timer (pomodoro/countdown/stopwatch) ==");
+    ESP_LOGI(TAG, "buttons: BOOT=GPIO%d, external switch=GPIO%d (to GND)", PIN_BTN, PIN_BTN2);
     esp_err_t err = nvs_flash_init();
     if (err == ESP_ERR_NVS_NO_FREE_PAGES || err == ESP_ERR_NVS_NEW_VERSION_FOUND) {
         nvs_flash_erase(); nvs_flash_init();
@@ -547,7 +550,7 @@ void app_main(void)
     nvs_load();
     lcd_init();
     rgb_init();
-    gpio_config_t bc = { .pin_bit_mask = 1ULL << PIN_BTN, .mode = GPIO_MODE_INPUT,
+    gpio_config_t bc = { .pin_bit_mask = (1ULL << PIN_BTN) | (1ULL << PIN_BTN2), .mode = GPIO_MODE_INPUT,
                          .pull_up_en = GPIO_PULLUP_ENABLE, .pull_down_en = GPIO_PULLDOWN_DISABLE,
                          .intr_type = GPIO_INTR_DISABLE };
     gpio_config(&bc);
