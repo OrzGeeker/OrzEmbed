@@ -1,0 +1,4 @@
+[toolchain]
+# RISC-V 目标使用上游 nightly(配合 .cargo/config.toml 的 build-std)
+channel = "nightly"
+components = ["rust-src"]

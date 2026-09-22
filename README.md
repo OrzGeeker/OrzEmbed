@@ -38,11 +38,13 @@ OrzEmbed/
 ├── images/          # 开发板图片和示意图
 ├── project/         # 多语言项目示例
 │   ├── c/           # C 语言项目示例
-│   ├── swift/       # Swift 语言项目示例
+│   ├── swift/       # Swift 语言项目示例(ESP-IDF + idf_swift)
 │   └── rust/        # Rust 语言项目示例
 ├── scripts/         # 脚本工具
-│   ├── esp32-setup-macos.sh      # macOS 环境设置脚本
-│   └── esp32c6-build-flash.sh     # 构建和烧录脚本
+│   ├── esp32-setup-macos.sh            # macOS 环境设置脚本
+│   ├── esp32c6-build-flash.sh          # C 工程构建/烧录/监视
+│   ├── esp32c6-rust-build-flash.sh     # Rust 工程构建/烧录
+│   └── esp32c6-swift-build-flash.sh    # Swift 工程构建/烧录
 └── README.md        # 项目说明文档
 ```
 
@@ -56,46 +58,45 @@ OrzEmbed/
 - **功能**：演示了 ESP32-C6 的基本日志功能与工程结构
 
 ### 2. Swift 语言项目 (`project/swift/`)
-- **项目配置**：`Package.swift` - Swift 包配置文件
-- **主代码**：`Sources/MyApp/main.swift` - 实现了基本的 Swift 嵌入式应用
-- **功能**：演示了如何在 ESP32-C6 上运行 Swift 代码，包括与 C 代码的互操作
+- **工程结构**：标准 ESP-IDF CMake 工程 + `main/idf_component.yml`（依赖 `espressif/idf_swift`）
+- **主代码**：`main/Main.swift`、`main/Led.swift` - Embedded Swift GPIO 翻转示例
+- **功能**：通过 `idf_swift` 组件在 `idf.py build` 流程中编译 Embedded Swift
 
 ### 3. Rust 语言项目 (`project/rust/`)
-- **项目配置**：`Cargo.toml` - Rust 依赖配置文件
-- **主代码**：`src/main.rs` - 实现了基本的 Rust 嵌入式应用
-- **功能**：演示了如何在 ESP32-C6 上运行 Rust 代码，包含 GPIO 操作与日志输出
+- **项目配置**：`Cargo.toml`、`rust-toolchain.toml`（nightly）、`.cargo/config.toml`
+- **主代码**：`src/main.rs` - GPIO 翻转与日志输出
+- **功能**：使用 esp-idf-svc / esp-idf-hal（RISC-V，上游 nightly + `build-std`）开发
 
 ## 使用方法
 
+> 以下命令均在仓库根目录执行。
+> C 与 Swift 都基于仓库内 `esp-idf` 子模块；Rust 使用 embuild 安装到 `project/rust/.embuild/` 的 ESP-IDF。
+
 ### C 项目
 ```bash
+./scripts/esp32c6-build-flash.sh            # 默认构建烧录 project/c
+# 或手动执行：
 source ./esp-idf/export.sh
-cd project/c
-idf.py set-target esp32c6
-idf.py build
-idf.py flash monitor
+cd project/c && idf.py set-target esp32c6 && idf.py build && idf.py flash monitor
 ```
 
 ### Swift 项目
-```bash
-cd project/swift
-swift build --experimental-swift-embedded --destination ./destination.json --target MyApp
+Embedded Swift 目前**不在稳定版 Swift 中**，需要官方**开发版快照（snapshot）**工具链。
 
+```bash
+# 安装快照工具链并使其位于 ~/Library/Developer/Toolchains/swift-latest.xctoolchain
+# （首选用 swiftly install main-snapshot；也可手动安装官方 *-osx.pkg）
 ./scripts/esp32c6-swift-build-flash.sh /dev/tty.usbmodemXXXX
 ```
-Swift 交叉编译产物位于 .build/ 对应目录；一键脚本会构建 Swift，并使用 ESP-IDF 的 bootloader/partition table 进行烧录。
+工程通过 ESP-IDF 组件 `espressif/idf_swift` 把 Swift 编译进 `idf.py build`。
 
 ### Rust 项目
 ```bash
-source ./esp-idf/export.sh
-cd project/rust
-unset IDF_PATH
-export ESP_IDF_VERSION=v5.2.3
-export ESP_IDF_TOOLS_INSTALL_DIR=custom:/Users/bytedance/Documents/OrzEmbed/project/rust/.embuild/espressif
-export IDF_PYTHON_ENV_PATH=/Users/bytedance/Documents/OrzEmbed/project/rust/.embuild/espressif/python_env/idf5.2_py3.9_env
-export PATH=/Users/bytedance/Documents/OrzEmbed/project/rust/.embuild/espressif/tools/riscv32-esp-elf/esp-13.2.0_20230928/riscv32-esp-elf/bin:$PATH
-cargo +esp build --release --target riscv32imac-esp-espidf
-cargo +esp espflash flash --release --target riscv32imac-esp-espidf --port /dev/tty.usbmodemXXXX
+# 首次需安装（RISC-V 目标使用上游 nightly + build-std）：
+rustup toolchain install nightly --component rust-src
+cargo install ldproxy --locked
+cargo install cargo-espflash --locked          # 仅烧录需要
+./scripts/esp32c6-rust-build-flash.sh /dev/tty.usbmodemXXXX
 ```
 
 ## 开发流程
@@ -103,22 +104,43 @@ cargo +esp espflash flash --release --target riscv32imac-esp-espidf --port /dev/
 ### 1. 环境搭建
 
 ```bash
-# 在 macOS 上设置开发环境
+# 在 macOS 上设置开发环境(安装工具 + 同步子模块 + 安装 esp32c6 工具链)
 ./scripts/esp32-setup-macos.sh
-
-# 进入 esp-idf 目录并初始化
-cd esp-idf
-source export.sh
 ```
+
+> **前置要求**：Python **>= 3.10**（建议 3.13）、CMake（>= 3.22）、Ninja。
+> ESP-IDF v6.1 在 Python 3.9 下会因 `importlib.metadata` 无法识别带点号的包名而误报依赖缺失。
+> 手动加载环境可执行 `source ./esp-idf/export.sh`。
 
 ### 2. 构建和烧录
 
 ```bash
-# 构建、烧录并监控
-./scripts/esp32c6-build-flash.sh
+# C:构建、烧录并监控(默认 project/c)
+./scripts/esp32c6-build-flash.sh [/dev/tty.usbmodemXXXX]
+
+# Rust:构建(并可选烧录)project/rust
+./scripts/esp32c6-rust-build-flash.sh [/dev/tty.usbmodemXXXX]
+
+# Swift:构建并烧录 project/swift
+./scripts/esp32c6-swift-build-flash.sh [/dev/tty.usbmodemXXXX]
 ```
 
-### 3. 常用命令
+### 3. 版本约定
+
+| 组件 | 版本 | 说明 |
+|------|------|------|
+| ESP-IDF（子模块） | **v6.1** | C 与 Swift 工程构建 |
+| Python | **3.13** | ESP-IDF v6.1 要求 >= 3.10 |
+| Rust（host） | **1.98.1** | stable |
+| Rust（target） | **nightly** + `build-std` | 目标 `riscv32imac-esp-espidf` |
+| esp-idf-svc / hal / sys | 0.53 / 0.47 / 0.38 | 支持 ESP-IDF v6.1 |
+| Swift | **6.5-dev**（main-snapshot） | Embedded Swift（稳定版不支持） |
+| espressif/idf_swift | ^1.0.0 | 提供 ESP-IDF 的 Swift 集成 |
+
+> 说明：C 与 Swift 工程使用仓库内 `esp-idf` 子模块；Rust 使用 embuild 安装到
+> `project/rust/.embuild/` 的 ESP-IDF。三条线统一为 ESP-IDF v6.1。
+
+### 4. 常用命令
 
 - `idf.py set-target esp32c6`: 设置目标芯片
 - `idf.py build`: 编译项目

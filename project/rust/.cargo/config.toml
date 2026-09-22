@@ -1,14 +1,19 @@
 [build]
 target = "riscv32imac-esp-espidf"
 
-[env]
-MCU = "esp32c6"
-TARGET = "riscv32imac-esp-espidf"
+[target.'cfg(target_os = "espidf")']
+linker = "ldproxy"
+runner = "espflash flash --monitor"
+rustflags = ["--cfg", "espidf_time64"]
 
 [unstable]
 build-std = ["std", "panic_abort"]
-build-std-features = ["compiler-builtins-mem"]
 
-[target.riscv32imac-esp-espidf]
-linker = "ldproxy"
-rustflags = ["--cfg", "espidf_time64"]
+[env]
+MCU = "esp32c6"
+# 与仓库 C 工程 / Swift 保持一致的 ESP-IDF 版本
+ESP_IDF_VERSION = "v6.1"
+# 将 ESP-IDF 与工具链安装到 <crate>/.embuild/espressif(已被 .gitignore 忽略)
+ESP_IDF_TOOLS_INSTALL_DIR = "workspace"
+# 通过乐鑫镜像下载工具,规避 Python SSL 证书问题(Homebrew Python 默认缺 CA)
+IDF_GITHUB_ASSETS = "dl.espressif.com/github_assets"

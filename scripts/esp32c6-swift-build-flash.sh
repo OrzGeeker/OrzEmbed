@@ -1,45 +1,35 @@
 #!/usr/bin/env bash
+# -*- coding: utf-8 -*-
+#
+# 构建并烧录 Embedded Swift 工程(基于 ESP-IDF + espressif/idf_swift)
+#
+#   ./scripts/esp32c6-swift-build-flash.sh [/dev/tty.usbmodemXXXX]
+#
+# 说明:
+#   - Embedded Swift 目前不在稳定版 Swift 中,需安装官方“开发版快照”工具链。
+#   - 本脚本仅负责把 Swift 工具链加入 PATH,随后复用 esp32c6-build-flash.sh
+#     的 idf.py 构建/烧录流程(project/swift 是一个标准 ESP-IDF 工程)。
+#   - 可用 SWIFT_TOOLCHAIN 指定工具链路径(默认 ~/Library/Developer/Toolchains/swift-latest.xctoolchain)。
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-SWIFT_DIR="${ROOT_DIR}/project/swift"
-RUST_DIR="${ROOT_DIR}/project/rust"
-
+PROJECT_DIR="${ROOT_DIR}/project/swift"
 PORT="${1:-}"
-if [[ -z "${PORT}" ]]; then
-  PORT_CANDIDATE="$(ls /dev/tty.usbmodem* 2>/dev/null | head -n 1 || true)"
-  if [[ -z "${PORT_CANDIDATE}" ]]; then
-    echo "Error: No serial port provided and no /dev/tty.usbmodem* found"
-    echo "Usage: $0 /dev/tty.usbmodemXXXX"
-    exit 1
-  fi
-  PORT="${PORT_CANDIDATE}"
+
+SWIFT_TOOLCHAIN="${SWIFT_TOOLCHAIN:-$HOME/Library/Developer/Toolchains/swift-latest.xctoolchain}"
+if [[ ! -x "${SWIFT_TOOLCHAIN}/usr/bin/swift" ]]; then
+  echo "Error: 未找到 Swift 工具链: ${SWIFT_TOOLCHAIN}/usr/bin/swift"
+  echo "       Embedded Swift 需要开发版快照工具链,请参考 README「Swift 项目」一节。"
+  exit 1
 fi
 
-unset IDF_PATH
-export ESP_IDF_VERSION="v5.2.3"
-export ESP_IDF_TOOLS_INSTALL_DIR="custom:${RUST_DIR}/.embuild/espressif"
-export IDF_PYTHON_ENV_PATH="${RUST_DIR}/.embuild/espressif/python_env/idf5.2_py3.9_env"
-export PATH="${RUST_DIR}/.embuild/espressif/tools/riscv32-esp-elf/esp-13.2.0_20230928/riscv32-esp-elf/bin:${PATH}"
+# 将 Swift 工具链置于 PATH 前部,idf_swift 组件会据此定位 swiftc
+PATH="${SWIFT_TOOLCHAIN}/usr/bin:${PATH}"
+export PATH
 
-echo "[1/4] Build Swift (embedded)"
-pushd "${SWIFT_DIR}" >/dev/null
-swift build --experimental-swift-embedded --destination ./destination.json --target MyApp -c release
-SWIFT_BIN_PATH="$(swift build --experimental-swift-embedded --destination ./destination.json --target MyApp -c release --show-bin-path)"
-SWIFT_ELF="${SWIFT_BIN_PATH}/MyApp"
-SWIFT_BIN="${SWIFT_BIN_PATH}/MyApp.bin"
-riscv32-esp-elf-objcopy -O binary "${SWIFT_ELF}" "${SWIFT_BIN}"
-popd >/dev/null
-
-echo "[2/4] Build ESP-IDF bootloader/partition table"
-pushd "${RUST_DIR}" >/dev/null
-cargo +esp build --release --target riscv32imac-esp-espidf
-BOOTLOADER_BIN="${RUST_DIR}/target/riscv32imac-esp-espidf/release/bootloader.bin"
-PARTITION_BIN="${RUST_DIR}/target/riscv32imac-esp-espidf/release/partition-table.bin"
-popd >/dev/null
-
-echo "[3/4] Flash to ${PORT}"
-"${IDF_PYTHON_ENV_PATH}/bin/python" -m esptool --chip esp32c6 --port "${PORT}" --baud 460800 \
-  write_flash -z 0x0 "${BOOTLOADER_BIN}" 0x8000 "${PARTITION_BIN}" 0x10000 "${SWIFT_BIN}"
-
-echo "[4/4] Done"
+# 复用通用 ESP-IDF 构建/烧录脚本
+if [[ -n "${PORT}" ]]; then
+  exec "${ROOT_DIR}/scripts/esp32c6-build-flash.sh" --project "${PROJECT_DIR}" "${PORT}"
+else
+  exec "${ROOT_DIR}/scripts/esp32c6-build-flash.sh" --project "${PROJECT_DIR}"
+fi

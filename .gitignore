@@ -68,6 +68,9 @@ project/**/sdkconfig.old
 project/rust/target/
 project/rust/.embuild/
 project/swift/.build/
+# ESP-IDF 组件管理器产物
+project/**/managed_components/
+project/**/dependencies.lock
 project/**/.ninja_deps
 project/**/.ninja_log
 project/**/CMakeCache.txt

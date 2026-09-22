@@ -2,16 +2,25 @@
 name = "my-rust-project"
 version = "0.1.0"
 edition = "2021"
+resolver = "2"
+rust-version = "1.82"
+
+[[bin]]
+name = "my-rust-project"
+harness = false # 不使用 cargo 自带测试 harness,避免 rust-analyzer 报错
+
+[profile.release]
+opt-level = "s"
+
+[profile.dev]
+debug = true
+opt-level = "z"
 
 [dependencies]
-esp-idf-sys = { version = "0.36.1", features = ["binstart"] }
-esp-idf-hal = "0.45.2"
-esp-idf-svc = "0.51.0"
 log = "0.4"
+# esp-idf-svc 默认包含 std + binstart,并提供 sys::link_patches 与 log
+esp-idf-svc = { version = "0.53", features = ["critical-section"] }
+esp-idf-hal = "0.47"
 
 [build-dependencies]
-embuild = "0.33"
-
-[features]
-default = ["std"]
-std = ["esp-idf-sys/std"]
+embuild = "0.33.5"
