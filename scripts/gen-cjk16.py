@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""生成 project/timer/main/cjk16.h(界面用到的简体汉字 16x16 点阵)。
+"""生成 components/orz_lcd/fonts/cjk16.h(界面用到的简体汉字 16x16 点阵)。
 
 只嵌入界面实际用到的汉字,体积极小(~1KB),适合小屏。
 用法:python3 scripts/gen-cjk16.py
@@ -13,7 +13,7 @@ FONT = "/System/Library/Fonts/PingFang.ttc"
 SIZE, W, H = 16, 16, 16
 # 界面里用到的所有汉字(去重后生成)
 CHARS = "番茄钟倒计时秒表就绪运行暂停结束调整中专注短休长分开 始切换模式减加按复位".replace(" ", "")
-OUT = os.path.join(os.path.dirname(__file__), "..", "project", "timer", "main", "cjk16.h")
+OUT = os.path.join(os.path.dirname(__file__), "..", "components", "orz_lcd", "fonts", "cjk16.h")
 
 
 def main():

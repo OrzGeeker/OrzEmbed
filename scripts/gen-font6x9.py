@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""生成 project/hwtest/main/font6x9.h 点阵字库。
+"""生成 components/orz_lcd/fonts/font6x9.h 点阵字库。
 
 把系统等宽字体(Menlo)渲染成 6x9 位图,ASCII 32..126。字模无关平台,
 仅用于在 ST7789 上画文本。用法:
@@ -13,7 +13,7 @@ from PIL import ImageFont
 FONT_PATH = "/System/Library/Fonts/Menlo.ttc"
 SIZE, W, H, BASE = 10, 6, 9, 8   # 字号 / 单元宽 / 单元高 / 基线行
 FIRST, LAST = 32, 126
-OUT = os.path.join(os.path.dirname(__file__), "..", "project", "hwtest", "main", "font6x9.h")
+OUT = os.path.join(os.path.dirname(__file__), "..", "components", "orz_lcd", "fonts", "font6x9.h")
 
 
 def build():

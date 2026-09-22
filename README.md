@@ -30,6 +30,11 @@ OrzEmbed 是一个专注于 RISC-V 嵌入式开发的项目，主要围绕 ESP32
 
 ```
 OrzEmbed/
+├── components/      # 共享 ESP-IDF 组件(各工程复用)
+│   ├── orz_board/   #   板级引脚/尺寸定义(单一来源)
+│   ├── orz_lcd/     #   ST7789 驱动 + 绘制 + 字库(6x9/16x16)
+│   ├── orz_rgb/     #   WS2812 RGB 灯驱动
+│   └── orz_input/   #   多按键扫描(短按/长按)
 ├── docs/            # 项目文档
 │   ├── ESP32-C6.md              # ESP32-C6-LCD-1.47 详细文档
 │   ├── ESP32-C6-LCD-1.47-BRINGUP.md  # 板级自检记录(LCD/SD/WiFi)
@@ -37,20 +42,26 @@ OrzEmbed/
 │   └── ESP-IDF-LEARNING-PATH.md  # ESP-IDF 示例工程学习路径
 ├── esp-idf/         # ESP-IDF 开发框架（子模块）
 ├── images/          # 开发板图片和示意图
-├── project/         # 多语言项目示例
+├── project/         # 各应用/语言示例(均为可独立编译的工程)
 │   ├── c/           # C 语言项目示例
 │   ├── hwtest/      # 板级自动自检固件(一条命令跑完所有外设)
-│   ├── timer/       # 独立计时器应用(番茄钟/倒计时/秒表,单键操作)
+│   ├── timer/       # 独立计时器应用(番茄钟/倒计时/秒表,4 键 4 灯)
 │   ├── swift/       # Swift 语言项目示例(ESP-IDF + idf_swift)
 │   └── rust/        # Rust 语言项目示例
 ├── scripts/         # 脚本工具
 │   ├── esp32-setup-macos.sh            # macOS 环境设置脚本
-│   ├── esp32c6-build-flash.sh          # C 工程构建/烧录/监视
+│   ├── esp32c6-build-flash.sh          # 通用 C 工程构建/烧录/监视(--project 指定)
 │   ├── esp32c6-hwtest.sh               # 板级自动自检(编译+烧录+解析 PASS/FAIL)
 │   ├── esp32c6-rust-build-flash.sh     # Rust 工程构建/烧录
-│   └── esp32c6-swift-build-flash.sh    # Swift 工程构建/烧录
+│   ├── esp32c6-swift-build-flash.sh    # Swift 工程构建/烧录
+│   ├── gen-font6x9.py                  # 生成 ASCII 字库 -> components/orz_lcd/fonts
+│   └── gen-cjk16.py                    # 生成汉字字库 -> components/orz_lcd/fonts
 └── README.md        # 项目说明文档
 ```
+
+> **工程结构约定**:各应用是独立可编译的 ESP-IDF 工程(`project/*`),通过
+> `EXTRA_COMPONENT_DIRS` 引用仓库根的共享组件(`components/`);引脚、LCD 驱动、
+> 字库、按键逻辑只维护一份,新增应用直接复用。字库为生成物,由 `scripts/gen-*.py` 输出。
 
 ## 多语言项目示例
 

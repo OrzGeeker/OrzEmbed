@@ -8,7 +8,6 @@
 #include <unistd.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
-#include "freertos/semphr.h"
 #include "esp_system.h"
 #include "esp_chip_info.h"
 #include "esp_flash.h"
@@ -18,29 +17,20 @@
 #include "nvs.h"
 #include "driver/gpio.h"
 #include "driver/spi_master.h"
-#include "driver/rmt_tx.h"
-#include "esp_lcd_panel_io.h"
-#include "esp_lcd_panel_vendor.h"
-#include "esp_lcd_panel_ops.h"
 #include "sdmmc_cmd.h"
 #include "esp_vfs_fat.h"
 #include "esp_wifi.h"
 #include "esp_netif.h"
 #include "esp_event.h"
-#include "font6x9.h"
+#include "orz_board.h"
+#include "orz_lcd.h"
+#include "orz_rgb.h"
 
-// ---- 引脚 (Waveshare ESP32-C6-LCD-1.47) ----
-#define PIN_MOSI     6
-#define PIN_SCLK     7
-#define PIN_MISO     5
-#define PIN_LCD_CS   14
-#define PIN_LCD_DC   15
-#define PIN_LCD_RST  21
-#define PIN_LCD_BL   22
-#define PIN_SD_CS    4
-#define PIN_RGB      8
-#define LCD_H        172
-#define LCD_V        320
+// ---- 引脚(板级定义来自 orz_board) ----
+#define PIN_SD_CS    BOARD_SD_CS
+#define PIN_RGB      BOARD_RGB_GPIO
+#define LCD_H        BOARD_LCD_H
+#define LCD_V        BOARD_LCD_V
 
 // 颜色 (RGB565)
 #define C_BLACK  0x0000
@@ -64,65 +54,8 @@ typedef struct { char name[14]; char status[5]; char detail[64]; } Ent;
 static Ent g_ent[16];
 static int g_nent;
 
-// ---- LCD ----
-static esp_lcd_panel_handle_t s_panel;
-static esp_lcd_panel_io_handle_t s_io;
-static SemaphoreHandle_t s_lcd_sem;
+// ---- LCD(由 orz_lcd 组件提供) ----
 static bool g_lcd_ready;
-
-static bool lcd_flush_done(esp_lcd_panel_io_handle_t io, esp_lcd_panel_io_event_data_t *e, void *ctx)
-{
-    (void)io; (void)e; (void)ctx;
-    BaseType_t hp = pdFALSE;
-    if (s_lcd_sem) xSemaphoreGiveFromISR(s_lcd_sem, &hp);
-    return hp == pdTRUE;
-}
-
-static void lcd_wait(void) { if (s_lcd_sem) xSemaphoreTake(s_lcd_sem, portMAX_DELAY); }
-
-static void fill_screen(uint16_t color)
-{
-    if (!g_lcd_ready) return;
-    static uint16_t b[LCD_H * 20];
-    for (int i = 0; i < LCD_H*20; i++) b[i] = color;
-    for (int y = 0; y < LCD_V; y += 20) {
-        int h = (y+20 <= LCD_V) ? 20 : (LCD_V - y);
-        esp_lcd_panel_draw_bitmap(s_panel, 0, y, LCD_H, y+h, b);
-        lcd_wait();
-    }
-}
-
-static void draw_text(int x0, int y0, const char *s, uint16_t fg, uint16_t bg, int scale)
-{
-    if (!g_lcd_ready) return;
-    int n = strlen(s);
-    int cw = FONT_W*scale, ch = FONT_H*scale;
-    int w = n*cw;
-    if (x0 + w > LCD_H) w = LCD_H - x0;
-    if (w <= 0 || y0 + ch > LCD_V || y0 < 0) return;
-    static uint16_t buf[LCD_H * 18];
-    for (int i = 0; i < w*ch; i++) buf[i] = bg;
-    for (int ci = 0; ci < n; ci++) {
-        unsigned char c = (unsigned char)s[ci];
-        if (c < 32 || c > 126) c = '?';
-        const uint8_t *gly = font6x9[c-32];
-        for (int r = 0; r < FONT_H; r++) {
-            uint8_t bits = gly[r];
-            if (!bits) continue;
-            for (int col = 0; col < FONT_W; col++) {
-                if (!(bits & (1 << (FONT_W-1-col)))) continue;
-                int px = ci*cw + col*scale, py = r*scale;
-                for (int dy = 0; dy < scale; dy++)
-                    for (int dx = 0; dx < scale; dx++) {
-                        int X = px+dx, Y = py+dy;
-                        if (X < w && Y < ch) buf[Y*w+X] = fg;
-                    }
-            }
-        }
-    }
-    esp_lcd_panel_draw_bitmap(s_panel, x0, y0, x0+w, y0+ch, buf);
-    lcd_wait();
-}
 
 static uint16_t status_color(const char *st)
 {
@@ -135,21 +68,21 @@ static uint16_t status_color(const char *st)
 static void draw_dashboard(void)
 {
     if (!g_lcd_ready) return;
-    fill_screen(C_BLACK);
-    draw_text(6, 6,  "ESP32-C6-LCD-1.47", C_CYAN, C_BLACK, 1);
-    draw_text(6, 18, "HARDWARE SELF-TEST", C_WHITE, C_BLACK, 1);
+    orz_lcd_fill(0, 0, LCD_H, LCD_V, C_BLACK);
+    orz_lcd_text(6, 6,  "ESP32-C6-LCD-1.47", C_CYAN, C_BLACK, 1);
+    orz_lcd_text(6, 18, "HARDWARE SELF-TEST", C_WHITE, C_BLACK, 1);
     int y = 36;
     for (int i = 0; i < g_nent; i++) {
         if (y > LCD_V - 26) break;
         char line[40];
         snprintf(line, sizeof line, "%-11s %s", g_ent[i].name, g_ent[i].status);
-        draw_text(6, y, line, status_color(g_ent[i].status), C_BLACK, 1);
-        draw_text(6, y+10, g_ent[i].detail, C_GRAY, C_BLACK, 1);
+        orz_lcd_text(6, y, line, status_color(g_ent[i].status), C_BLACK, 1);
+        orz_lcd_text(6, y+10, g_ent[i].detail, C_GRAY, C_BLACK, 1);
         y += 22;
     }
     char sum[48];
     snprintf(sum, sizeof sum, "PASS %d  FAIL %d  WARN %d", g_pass, g_fail, g_warn);
-    draw_text(6, LCD_V-14, sum, (g_fail ? C_RED : C_GREEN), C_BLACK, 1);
+    orz_lcd_text(6, LCD_V-14, sum, (g_fail ? C_RED : C_GREEN), C_BLACK, 1);
 }
 
 // ---- 记录 + 串口输出 ----
@@ -281,37 +214,12 @@ static void test_gpio_bridge(void)
 
 static bool test_lcd(void)
 {
-    spi_bus_config_t bus = {
-        .mosi_io_num = PIN_MOSI, .miso_io_num = PIN_MISO, .sclk_io_num = PIN_SCLK,
-        .quadwp_io_num = -1, .quadhd_io_num = -1,
-        .max_transfer_sz = LCD_H * 40 * sizeof(uint16_t),
-    };
-    if (spi_bus_initialize(SPI2_HOST, &bus, SPI_DMA_CH_AUTO) != ESP_OK) return false;
-    esp_lcd_panel_io_spi_config_t iocfg = {
-        .cs_gpio_num = PIN_LCD_CS, .dc_gpio_num = PIN_LCD_DC, .spi_mode = 0,
-        .pclk_hz = 20*1000*1000, .trans_queue_depth = 10, .lcd_cmd_bits = 8, .lcd_param_bits = 8,
-    };
-    if (esp_lcd_new_panel_io_spi((esp_lcd_spi_bus_handle_t)SPI2_HOST, &iocfg, &s_io) != ESP_OK) return false;
-    s_lcd_sem = xSemaphoreCreateBinary();
-    esp_lcd_panel_io_callbacks_t cbs = { .on_color_trans_done = lcd_flush_done };
-    esp_lcd_panel_io_register_event_callbacks(s_io, &cbs, NULL);
-    esp_lcd_panel_dev_config_t pcfg = {
-        .reset_gpio_num = PIN_LCD_RST, .rgb_ele_order = LCD_RGB_ELEMENT_ORDER_RGB, .bits_per_pixel = 16,
-    };
-    if (esp_lcd_new_panel_st7789(s_io, &pcfg, &s_panel) != ESP_OK) return false;
-    if (esp_lcd_panel_reset(s_panel) != ESP_OK) return false;
-    if (esp_lcd_panel_init(s_panel) != ESP_OK) return false;
-    esp_lcd_panel_invert_color(s_panel, true);
-    esp_lcd_panel_set_gap(s_panel, 34, 0);
-    esp_lcd_panel_disp_on_off(s_panel, true);
-    gpio_config_t bl = {.pin_bit_mask = 1ULL<<PIN_LCD_BL, .mode = GPIO_MODE_OUTPUT};
-    gpio_config(&bl);
-    gpio_set_level(PIN_LCD_BL, 1);
+    if (orz_lcd_init() != ESP_OK) return false;
     g_lcd_ready = true;
     // 上电底色闪现,肉眼确认 RGB 正常
-    fill_screen(C_RED);   vTaskDelay(pdMS_TO_TICKS(250));
-    fill_screen(C_GREEN); vTaskDelay(pdMS_TO_TICKS(250));
-    fill_screen(C_BLUE);  vTaskDelay(pdMS_TO_TICKS(250));
+    orz_lcd_fill(0, 0, LCD_H, LCD_V, C_RED);   vTaskDelay(pdMS_TO_TICKS(250));
+    orz_lcd_fill(0, 0, LCD_H, LCD_V, C_GREEN); vTaskDelay(pdMS_TO_TICKS(250));
+    orz_lcd_fill(0, 0, LCD_H, LCD_V, C_BLUE);  vTaskDelay(pdMS_TO_TICKS(250));
     return true;
 }
 
@@ -346,25 +254,13 @@ static void test_sd(void)
 
 static void test_rgb(void)
 {
-    rmt_channel_handle_t chan = NULL;
-    rmt_tx_channel_config_t txc = {
-        .clk_src = RMT_CLK_SRC_DEFAULT, .gpio_num = PIN_RGB, .mem_block_symbols = 64,
-        .resolution_hz = 10*1000*1000, .trans_queue_depth = 4,
-    };
-    if (rmt_new_tx_channel(&txc, &chan) != ESP_OK) { report("rgb","FAIL","rmt"); return; }
-    rmt_bytes_encoder_config_t bec = {
-        .bit0 = {.level0=1,.duration0=4,.level1=0,.duration1=8},
-        .bit1 = {.level0=1,.duration0=8,.level1=0,.duration1=4},
-        .flags.msb_first = 1,
-    };
-    rmt_encoder_handle_t enc = NULL; rmt_new_bytes_encoder(&bec, &enc); rmt_enable(chan);
-    rmt_transmit_config_t tc = {.loop_count = 0};
-    const uint8_t seq[3][3] = {{0,60,0},{60,0,0},{0,0,60}};
-    bool ok = true;
-    for (int i = 0; i < 3; i++) {
-        if (rmt_transmit(chan, enc, seq[i], 3, &tc) != ESP_OK) ok = false;
-        rmt_tx_wait_all_done(chan, 100);
-        vTaskDelay(pdMS_TO_TICKS(250));
+    bool ok = (orz_rgb_init(BOARD_RGB_GPIO) == ESP_OK);
+    if (ok) {
+        const uint8_t seq[3][3] = {{0,60,0},{60,0,0},{0,0,60}};
+        for (int i = 0; i < 3; i++) {
+            orz_rgb_set(seq[i][0], seq[i][1], seq[i][2]);
+            vTaskDelay(pdMS_TO_TICKS(250));
+        }
     }
     report("rgb", ok ? "PASS" : "FAIL", "WS2812 G/R/B");
 }
@@ -406,7 +302,7 @@ void app_main(void)
     ESP_LOGI("HWTEST", "========== SUMMARY: PASS=%d FAIL=%d WARN=%d ==========",
              g_pass, g_fail, g_warn);
     // 结果面板定格:标题栏改色表示完成
-    if (g_lcd_ready) draw_text(6, LCD_V-26, "SELF-TEST DONE", C_WHITE, C_BLACK, 1);
+    if (g_lcd_ready) orz_lcd_text(6, LCD_V-26, "SELF-TEST DONE", C_WHITE, C_BLACK, 1);
     ESP_LOGI("HWTEST", "HWTEST_DONE");
 
     // ---- GPIO 探针模式 ----
