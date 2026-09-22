@@ -362,28 +362,59 @@ static char s_last_time[16] = "\xff";
 static char s_last_status[20] = "\xff";
 static char s_last_info[24] = "\xff";
 static float s_last_frac = -2;
+static int s_last_cycle = -1, s_last_phase = -1;
 
-#define Y_TITLE  8
-#define Y_TIME   46
-#define Y_BAR    104
-#define Y_STATUS 140
-#define Y_INFO   176
-#define Y_HINT   296
+#define C_FRAME  0x2965          // 细边框 / 分隔线(暗灰蓝)
+#define MARGIN   12
+#define Y_TITLE  14
+#define Y_SEP    36
+#define Y_TIME   70
+#define Y_BAR    140
+#define BAR_H    12
+#define Y_STATUS 170
+#define Y_INFO   198
+#define Y_DOTS   230
+#define Y_HINT   286
+
+static void hline(int x, int y, int w, uint16_t c) { fill_rect(x, y, w, 1, c); }
+static void frame(int x, int y, int w, int h, uint16_t c)
+{
+    fill_rect(x, y, w, 1, c);
+    fill_rect(x, y + h - 1, w, 1, c);
+    fill_rect(x, y, 1, h, c);
+    fill_rect(x + w - 1, y, 1, h, c);
+}
+
+static void draw_dots(void)
+{
+    const int n = 4, sz = 12, gap = 12;
+    int total = n * sz + (n - 1) * gap;
+    int x = (LCD_H - total) / 2;
+    for (int i = 0; i < n; i++) {
+        uint16_t c;
+        if (i < s_cycle - 1)        c = C_GREEN;        // 已完成轮次
+        else if (i == s_cycle - 1)  c = mode_color();   // 当前轮次
+        else                        c = C_DARK;
+        fill_rect(x + i * (sz + gap), Y_DOTS, sz, sz, c);
+    }
+}
 
 static void draw_static(void)
 {
     fill_rect(0, 0, LCD_H, LCD_V, C_BLACK);
+    frame(0, 0, LCD_H, LCD_V, C_FRAME);                   // 外框:可判断四周是否被裁切
     draw_text_c(Y_TITLE, mode_name(), C_CYAN, C_BLACK, 2);
-    fill_rect(0, Y_HINT - 4, LCD_H, LCD_V - (Y_HINT - 4), C_BLACK);
+    hline(MARGIN + 6, Y_SEP, LCD_H - 2 * (MARGIN + 6), C_FRAME);
+    fill_rect(0, Y_HINT - 8, LCD_H, LCD_V - (Y_HINT - 8), C_BLACK);
     if (s_mode == M_SW) {
-        draw_text_c(Y_HINT,      "1x start/pause", C_GRAY, C_BLACK, 1);
-        draw_text_c(Y_HINT + 12, "2x mode   hold reset", C_GRAY, C_BLACK, 1);
+        draw_text_c(Y_HINT,      "1x  start / pause", C_GRAY, C_BLACK, 1);
+        draw_text_c(Y_HINT + 14, "2x  mode    hold  reset", C_GRAY, C_BLACK, 1);
     } else if (s_mode == M_CD) {
-        draw_text_c(Y_HINT,      "1x start/pause  2x mode", C_GRAY, C_BLACK, 1);
-        draw_text_c(Y_HINT + 12, "hold: edit minutes / reset", C_GRAY, C_BLACK, 1);
+        draw_text_c(Y_HINT,      "1x  start / pause", C_GRAY, C_BLACK, 1);
+        draw_text_c(Y_HINT + 14, "2x mode   hold: edit / reset", C_GRAY, C_BLACK, 1);
     } else {
-        draw_text_c(Y_HINT,      "1x start/pause  2x mode", C_GRAY, C_BLACK, 1);
-        draw_text_c(Y_HINT + 12, "hold: reset pomodoro", C_GRAY, C_BLACK, 1);
+        draw_text_c(Y_HINT,      "1x  start / pause", C_GRAY, C_BLACK, 1);
+        draw_text_c(Y_HINT + 14, "2x mode    hold: reset", C_GRAY, C_BLACK, 1);
     }
 }
 
@@ -396,10 +427,13 @@ static void render(void)
         strcpy(s_last_status, "\xff");
         strcpy(s_last_info, "\xff");
         s_last_frac = -2;
+        s_last_cycle = -1;
+        s_last_phase = -1;
     }
 
-    // 大号时间
+    // 大号时间(番茄钟/倒计时用 scale5;秒表含十分位用 scale4)
     char t[16];
+    int tscale = (s_mode == M_SW) ? 4 : 5;
     if (s_mode == M_SW) {
         fmt_clock_t(s_elapsed_us / 1000, t, sizeof t);
     } else {
@@ -409,12 +443,12 @@ static void render(void)
     }
     if (strcmp(t, s_last_time) != 0) {
         uint16_t col = (s_state == S_DONE) ? C_RED : C_WHITE;
-        fill_rect(0, Y_TIME, LCD_H, FONT_H * 4, C_BLACK);
-        draw_text_c(Y_TIME, t, col, C_BLACK, 4);
+        fill_rect(0, Y_TIME, LCD_H, FONT_H * 5, C_BLACK);
+        draw_text_c(Y_TIME, t, col, C_BLACK, tscale);
         strcpy(s_last_time, t);
     }
 
-    // 进度条
+    // 进度条(带边框)
     float frac;
     if (s_mode == M_SW) {
         frac = (float)((s_elapsed_us / 1000000) % 60) / 60.0f;
@@ -424,12 +458,13 @@ static void render(void)
         if (frac < 0) frac = 0;
         if (frac > 1) frac = 1;
     }
-    if (frac < 0.002f && s_last_frac > 0.002f) frac = 0;      // 允许回到 0
+    if (frac < 0.002f && s_last_frac > 0.002f) frac = 0;
     if ((frac - s_last_frac > 0.004f) || (s_last_frac - frac > 0.02f) || s_last_frac < 0) {
-        const int bx = 6, bw = LCD_H - 12, bh = 16;
+        const int bx = MARGIN + 6, bw = LCD_H - 2 * (MARGIN + 6), bh = BAR_H;
         fill_rect(bx, Y_BAR, bw, bh, C_DARK);
-        int fw = (int)(bw * frac);
-        if (fw > 0) fill_rect(bx, Y_BAR, fw, bh, mode_color());
+        int fw = (int)((bw - 2) * frac);
+        if (fw > 0) fill_rect(bx + 1, Y_BAR + 1, fw, bh - 2, mode_color());
+        frame(bx, Y_BAR, bw, bh, C_FRAME);
         s_last_frac = frac;
     }
 
@@ -462,6 +497,13 @@ static void render(void)
         fill_rect(0, Y_INFO, LCD_H, FONT_H * 2, C_BLACK);
         draw_text_c(Y_INFO, info, C_GRAY, C_BLACK, 2);
         strcpy(s_last_info, info);
+    }
+
+    // 番茄钟轮次指示点
+    if (s_mode == M_POMO && (s_cycle != s_last_cycle || s_phase != s_last_phase)) {
+        draw_dots();
+        s_last_cycle = s_cycle;
+        s_last_phase = s_phase;
     }
 }
 
