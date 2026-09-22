@@ -32,6 +32,7 @@ OrzEmbed 是一个专注于 RISC-V 嵌入式开发的项目，主要围绕 ESP32
 OrzEmbed/
 ├── docs/            # 项目文档
 │   ├── ESP32-C6.md              # ESP32-C6-LCD-1.47 详细文档
+│   ├── ESP32-C6-LCD-1.47-BRINGUP.md  # 板级自检记录(LCD/SD/WiFi)
 │   ├── ESP-IDF-ANALYSIS.md      # ESP-IDF 组件分析与学习路径
 │   └── ESP-IDF-LEARNING-PATH.md  # ESP-IDF 示例工程学习路径
 ├── esp-idf/         # ESP-IDF 开发框架（子模块）
@@ -154,6 +155,7 @@ cargo install cargo-espflash --locked          # 仅烧录需要
 - [ESP-IDF Documentation](https://docs.espressif.com/projects/esp-idf/)
 - [ESP-IDF 组件分析与学习路径](./docs/ESP-IDF-ANALYSIS.md)
 - [ESP-IDF 示例工程学习路径](./docs/ESP-IDF-LEARNING-PATH.md)
+- [板级自检记录(LCD/SD/WiFi)](./docs/ESP32-C6-LCD-1.47-BRINGUP.md)
 
 ## 社区资源
 
