@@ -29,8 +29,7 @@
 #define PIN_LCD_RST  21
 #define PIN_LCD_BL   22
 #define PIN_RGB      8
-#define PIN_BTN      9
-#define PIN_BTN2     0          // 外接开关(排针 GPIO0 ↔ GND),与 BOOT 功能相同
+#define PIN_BTN      0          // 外接开关 GPIO0 ↔ GND(等价 BOOT)
 #define LCD_H        172
 #define LCD_V        320
 
@@ -204,6 +203,39 @@ static void rgb_set(uint8_t r, uint8_t g, uint8_t b)
     rmt_tx_wait_all_done(s_rgb, 100);
 }
 
+// ---------------- 跑马灯 LED ----------------
+// 注意:LED1 接在 GP9 —— 与板载 BOOT 按键同脚。若想保留 BOOT 按键可用,
+// 把 PIN_LED1 改成空闲脚(GP10 / GP11 / GP23)即可。
+#define PIN_LED1      9
+#define PIN_LED2     18
+#define PIN_LED3     19
+#define PIN_LED4     20
+#define LED_ACTIVE_HIGH 1       // 高电平点亮;若你的 LED 是低电平点亮改为 0
+static const int LED_PINS[] = { PIN_LED1, PIN_LED2, PIN_LED3, PIN_LED4 };
+#define NLED ((int)(sizeof(LED_PINS) / sizeof(LED_PINS[0])))
+
+static void led_init(void)
+{
+    uint64_t mask = 0;
+    for (int i = 0; i < NLED; i++) mask |= (1ULL << LED_PINS[i]);
+    gpio_config_t c = { .pin_bit_mask = mask, .mode = GPIO_MODE_OUTPUT, .intr_type = GPIO_INTR_DISABLE };
+    gpio_config(&c);
+    for (int i = 0; i < NLED; i++) gpio_set_level(LED_PINS[i], !LED_ACTIVE_HIGH);
+}
+
+// 跑马灯:单个光点依次点亮
+static void marquee_update(void)
+{
+    static int idx = 0;
+    static int64_t last = 0;
+    int64_t now = esp_timer_get_time();
+    if (now - last < 150000) return;          // 150ms 一步
+    last = now;
+    for (int i = 0; i < NLED; i++)
+        gpio_set_level(LED_PINS[i], (i == idx) ? LED_ACTIVE_HIGH : !LED_ACTIVE_HIGH);
+    idx = (idx + 1) % NLED;
+}
+
 // ---------------- NVS ----------------
 static void nvs_load(void)
 {
@@ -233,8 +265,8 @@ static int64_t s_last_click_us;
 
 static int btn_poll(void)
 {
-    // 按下 = 0;BOOT(GPIO9) 或 外接开关(GPIO0) 任一按下均有效
-    int lvl = (gpio_get_level(PIN_BTN) == 0 || gpio_get_level(PIN_BTN2) == 0) ? 0 : 1;
+    // 按下 = 0;外接开关 GPIO0
+    int lvl = (gpio_get_level(PIN_BTN) == 0) ? 0 : 1;
     int64_t now = esp_timer_get_time();
     if (lvl == 0 && !s_btn_down) {
         s_btn_down = true;
@@ -542,7 +574,8 @@ static void rgb_update(void)
 void app_main(void)
 {
     ESP_LOGI(TAG, "== standalone timer (pomodoro/countdown/stopwatch) ==");
-    ESP_LOGI(TAG, "buttons: BOOT=GPIO%d, external switch=GPIO%d (to GND)", PIN_BTN, PIN_BTN2);
+    ESP_LOGI(TAG, "button=GPIO%d; LEDs=GPIO%d/%d/%d/%d (marquee)",
+             PIN_BTN, LED_PINS[0], LED_PINS[1], LED_PINS[2], LED_PINS[3]);
     esp_err_t err = nvs_flash_init();
     if (err == ESP_ERR_NVS_NO_FREE_PAGES || err == ESP_ERR_NVS_NEW_VERSION_FOUND) {
         nvs_flash_erase(); nvs_flash_init();
@@ -550,10 +583,11 @@ void app_main(void)
     nvs_load();
     lcd_init();
     rgb_init();
-    gpio_config_t bc = { .pin_bit_mask = (1ULL << PIN_BTN) | (1ULL << PIN_BTN2), .mode = GPIO_MODE_INPUT,
+    gpio_config_t bc = { .pin_bit_mask = 1ULL << PIN_BTN, .mode = GPIO_MODE_INPUT,
                          .pull_up_en = GPIO_PULLUP_ENABLE, .pull_down_en = GPIO_PULLDOWN_DISABLE,
                          .intr_type = GPIO_INTR_DISABLE };
     gpio_config(&bc);
+    led_init();
     s_last_tick = esp_timer_get_time();
     draw_static();
     render();
@@ -567,6 +601,7 @@ void app_main(void)
         tick_timer();
         render();
         rgb_update();
+        marquee_update();
         vTaskDelay(pdMS_TO_TICKS(25));
     }
 }
