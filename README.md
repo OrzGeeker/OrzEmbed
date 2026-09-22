@@ -40,6 +40,7 @@ OrzEmbed/
 ├── project/         # 多语言项目示例
 │   ├── c/           # C 语言项目示例
 │   ├── hwtest/      # 板级自动自检固件(一条命令跑完所有外设)
+│   ├── timer/       # 独立计时器应用(番茄钟/倒计时/秒表,单键操作)
 │   ├── swift/       # Swift 语言项目示例(ESP-IDF + idf_swift)
 │   └── rust/        # Rust 语言项目示例
 ├── scripts/         # 脚本工具
@@ -79,6 +80,16 @@ OrzEmbed/
 ```bash
 ./scripts/esp32c6-hwtest.sh            # 自动自检(全部通过退出码 0,有 FAIL 退出码 1)
 ./scripts/esp32c6-hwtest.sh --probe    # 追加引导式导通/虚焊探测
+```
+
+### 5. 独立计时器应用 (`project/timer/`)
+- **插电即运行、不依赖网络/主机**的桌面计时器:番茄钟 / 倒计时 / 秒表;
+- 仅用板载 **BOOT 单键**操作:单击=开始/暂停、双击=切模式、长按=复位(倒计时停止时长按=调整分钟);
+- 屏上大字 + 进度条 + 阶段信息;状态用 **RGB 灯**提示(运行/暂停/结束闪烁);设置存 flash 断电不丢;
+- 构建烧录(复用通用脚本):
+
+```bash
+./scripts/esp32c6-build-flash.sh /dev/cu.usbmodemXXXX --project project/timer
 ```
 
 ## 使用方法
