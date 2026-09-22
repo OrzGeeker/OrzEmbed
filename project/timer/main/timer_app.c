@@ -1,6 +1,6 @@
 // 独立计时器:番茄钟 / 倒计时 / 秒表
 // 硬件:ESP32-C6-LCD-1.47(ST7789 172x320 + RGB LED + BOOT 键)
-// 交互:仅板载 BOOT(GPIO9) 单击/双击/长按;提示用 RGB 灯,无蜂鸣器
+// 交互:外接开关 GPIO0(等价 BOOT)单击/双击/长按;RGB 状态灯 + 跑马灯 LED
 // 插电即运行,不依赖网络/主机
 #include <stdio.h>
 #include <string.h>
@@ -204,12 +204,11 @@ static void rgb_set(uint8_t r, uint8_t g, uint8_t b)
 }
 
 // ---------------- 跑马灯 LED ----------------
-// 注意:LED1 接在 GP9 —— 与板载 BOOT 按键同脚。若想保留 BOOT 按键可用,
-// 把 PIN_LED1 改成空闲脚(GP10 / GP11 / GP23)即可。
-#define PIN_LED1      9
-#define PIN_LED2     18
-#define PIN_LED3     19
-#define PIN_LED4     20
+// 四个绿色 LED:GP18 / GP19 / GP20 / GP23(避开 GP9=BOOT,防止输出与按键冲突)
+#define PIN_LED1     18
+#define PIN_LED2     19
+#define PIN_LED3     20
+#define PIN_LED4     23
 #define LED_ACTIVE_HIGH 1       // 高电平点亮;若你的 LED 是低电平点亮改为 0
 static const int LED_PINS[] = { PIN_LED1, PIN_LED2, PIN_LED3, PIN_LED4 };
 #define NLED ((int)(sizeof(LED_PINS) / sizeof(LED_PINS[0])))
