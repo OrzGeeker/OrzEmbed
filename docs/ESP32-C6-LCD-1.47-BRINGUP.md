@@ -13,13 +13,16 @@
 
 | 功能 | 结果 | 说明 |
 |------|------|------|
-| 芯片 / Flash / 启动 | ✅ 正常 | esptool 读写、C/Rust/Swift 固件均能编译、烧录、运行 |
-| GPIO | ✅ 正常 | Rust 示例 LED 翻转、C 示例运行 |
-| **LCD(ST7789, 172×320, SPI)** | ✅ **正常** | 驱动初始化成功,屏上实测红→绿→蓝→白轮换 |
-| **microSD(SPI, 与 LCD 共总线)** | ✅ **正常** | 格式化 FAT 后:挂载、写文件、写 1MB 大文件、读回、重复重挂载持久化全部通过 |
-| **WiFi(2.4GHz)** | ❌ **异常(硬件)** | 天线在位但 RF 衰减约 **60 dB**,无法关联/发射;已排除软件/校准因素 |
+| 芯片 / Flash / 启动 | ✅ 正常 | esptool 读写;C / Rust / Swift 固件均可编译、烧录、运行 |
+| GPIO(含手工焊接排针) | ✅ 正常 | `gpio_bridge` 自检无短路;外接开关/LED 均识别 |
+| NVS | ✅ 正常 | 写入 + commit + 回读一致 |
+| **LCD(ST7789, 172×320, SPI)** | ✅ **正常** | `esp_lcd` 驱动初始化;屏上实测红→绿→蓝→白 |
+| **microSD(SPI, 与 LCD 共总线)** | ✅ **正常** | 格式化 FAT 后:挂载、写 1MB、读回校验、重挂载持久化全通过 |
+| RGB(WS2812) | ✅ 正常 | G/R/B 三色可显示 |
+| **WiFi(2.4GHz)** | ❌ **异常(硬件)** | 天线在位但 RF 衰减约 **55~60dB**,无法关联/发射 |
+| **BLE** | ⚠️ **同样受限** | 协议栈/广播/扫描均正常,但空口收不到(与 WiFi 共用同一射频/天线) |
 
-> **结论:除 WiFi 射频外,板子其余已验证功能全部正常。** 建议按第 4 节定位并修复 WiFi 硬件问题。
+> **结论:除射频(WiFi / BLE / 802.15.4)外,板子其余功能全部正常。** 射频为硬件问题(天线/匹配网络),详见第 4 节。
 
 ---
 
@@ -43,7 +46,8 @@
 - 校验 flash 各偏移:bootloader `0x0`、分区表 `0x8000`、app `0x10000` 头部均为合法 `0xE9`。
 
 ### 3.2 GPIO
-- 仓库 Rust 示例(`project/rust`)GPIO 翻转 + 日志正常。
+- 仓库 Rust 示例(`project/rust`)GPIO 翻转 + 日志正常;
+- **手工焊接的 GPIO 排针**经 `project/hwtest` 的 `gpio_bridge` 自检:**无锡桥/短路**;外接开关(GP0~GP3)与 LED(GP18/19/20/23)均可正常识别。
 
 ### 3.3 LCD(ST7789 172×320, SPI)
 - 引脚:**MOSI=GPIO6, SCLK=GPIO7, CS=GPIO14, DC=GPIO15, RST=GPIO21, BL=GPIO22**。
@@ -85,6 +89,16 @@
 > 原理:`gpio_bridge` 通过“逐个拉高 + 基线差分”自动检测排针间**低阻连接(锡桥)**;
 > `--probe` 则逐个提示把排针短接到 GND,自动判定**虚焊/开路**。二者结合即可覆盖**排针焊接验收**。
 > 注:排针 16/17(UART 控制台)与 12/13(USB)不参与测试。
+> 注:若板上已焊接外设 LED(如本项目的 GP18/19/20/23),`gpio_pull` 会显示这些脚被拉低(WARN),属正常现象。
+
+### 3.7 蓝牙(BLE)
+
+- **芯片能力**:`SOC_BLE_SUPPORTED=1`、`SOC_BLE_50_SUPPORTED=1`、`SOC_BLE_MESH_SUPPORTED=1`、`SOC_IEEE802154_SUPPORTED=1`;ESP-IDF v6.1 提供 **NimBLE** 与 **Bluedroid** 两套主机栈。
+  - 支持 BLE 5 特性(2M PHY / Coded PHY 长距 / 扩展广播 / 周期广播 / 功率控制 / Subrate / AoA-AoD);
+  - **仅支持 BLE,不支持经典蓝牙(BR/EDR)**。
+- **实机验证(NimBLE)**:初始化/同步正常 → 扫描 `rc=0`(收到周边 BLE 设备)→ 广播 `ADVERTISING ... rc=0`(广播功率已调到 +20dBm)。
+- **空口结果**:Mac 侧(CoreBluetooth/bleak)多次扫描 **收不到该广播** —— BLE 与 WiFi 共用同一根天线/射频通路,受同一硬件衰减影响。
+- **结论**:**BLE 协议栈功能正常,但受射频硬件故障限制,空口基本不可用**。
 
 ---
 
@@ -223,3 +237,27 @@ for (int i = 0; i < max; i++)
 | BOOT | GPIO9 |
 
 > 注意:刷写后内置 USB-Serial-JTAG 可能停在 DOWNLOAD 模式,串口无输出属正常,按 **RST** 或重新插拔 USB 即可运行。
+
+---
+
+## 8. 本项目实现(工程结构)
+
+自检与时序应用均已工程化,公共代码抽为仓库级共享组件:
+
+```
+OrzEmbed/
+├── components/          # 共享 ESP-IDF 组件(各工程复用)
+│   ├── orz_board/       #   板级引脚/尺寸定义(单一来源)
+│   ├── orz_lcd/         #   ST7789 驱动 + 绘制 + 字库(fonts/)
+│   ├── orz_rgb/         #   WS2812 RGB 灯驱动
+│   └── orz_input/       #   多按键扫描(短按/长按)
+├── project/
+│   ├── hwtest/          # 板级自动自检(本文档第 3.6 节)
+│   ├── timer/           # 独立计时器(番茄钟/倒计时/秒表)
+│   ├── c/  rust/  swift/# 语言示例
+└── scripts/             # 构建/烧录/自检/字库生成脚本
+```
+
+- 各工程通过 `EXTRA_COMPONENT_DIRS` 引用 `components/`,引脚/驱动/字库**只维护一份**;
+- 字库为**生成物**:`scripts/gen-font6x9.py`(ASCII)、`scripts/gen-cjk16.py`(汉字)输出到 `components/orz_lcd/fonts/`;
+- 自检:`./scripts/esp32c6-hwtest.sh [--probe]`;计时器:`./scripts/esp32c6-build-flash.sh --project project/timer`。

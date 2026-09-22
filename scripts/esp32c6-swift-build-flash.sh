@@ -3,7 +3,7 @@
 #
 # 构建并烧录 Embedded Swift 工程(基于 ESP-IDF + espressif/idf_swift)
 #
-#   ./scripts/esp32c6-swift-build-flash.sh [/dev/tty.usbmodemXXXX]
+#   ./scripts/esp32c6-swift-build-flash.sh [/dev/cu.usbmodemXXXX]
 #
 # 说明:
 #   - Embedded Swift 目前不在稳定版 Swift 中,需安装官方“开发版快照”工具链。

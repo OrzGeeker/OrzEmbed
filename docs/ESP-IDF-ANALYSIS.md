@@ -4,6 +4,10 @@
 
 ESP-IDF（Espressif IoT Development Framework）是乐鑫（Espressif）公司为其ESP32系列芯片开发的官方开发框架。本文档对ESP-IDF的主要组件进行分析，并提供从易到难的学习路径，帮助开发者快速掌握ESP32-C6的开发技术。
 
+> **适用范围**:本文基于仓库内 **ESP-IDF v6.1** 子模块、目标芯片 `esp32c6` 整理。
+> 组件/示例路径均已对照 v6.1 校验;部分组件在 ESP32-C6 上有差异(已在表中标注)。
+> 本项目的实际用法参见 [README](../README.md) 与 [板级自检记录](./ESP32-C6-LCD-1.47-BRINGUP.md)。
+
 ## 组件功能分析
 
 ### 1. 核心组件
@@ -26,18 +30,18 @@ ESP-IDF（Espressif IoT Development Framework）是乐鑫（Espressif）公司�
 | **lwip** | 轻量级TCP/IP协议栈，提供网络协议实现 | 高 |
 | **esp-tls** | TLS加密通信，支持安全连接 | 中 |
 | **esp_netif** | 网络接口抽象，统一Wi-Fi和以太网接口 | 中 |
-| **bt** | 蓝牙功能，支持BLE和传统蓝牙 | 高 |
+| **bt** | 蓝牙 LE 功能（NimBLE / Bluedroid）;**ESP32-C6 仅支持 BLE,无经典蓝牙** | 高 |
 
 ### 3. 硬件相关组件
 
 | 组件名称 | 功能描述 | 复杂度 |
 |---------|---------|--------|
 | **hal** | 硬件抽象层，提供硬件无关的接口 | 中 |
-| **driver** | 外设驱动，如I2C、TWAI、GPIO等 | 中 |
+| **driver** | 外设驱动(I2C / SPI / GPIO / TWAI 等);v5+ 已拆分为 `esp_driver_*` 子组件,`driver` 仍作为总入口 | 中 |
 | **soc** | 芯片相关功能，提供寄存器定义和芯片特性 | 高 |
 | **esp_hw_support** | 硬件支持功能，如CPU、缓存等 | 中 |
 | **esp_rom** | ROM函数封装，提供底层功能 | 中 |
-| **esp_psram** | PSRAM支持，扩展内存 | 低 |
+| **esp_psram** | PSRAM 支持;**ESP32-C6 无 PSRAM,该组件在本板不适用** | 低 |
 
 ### 4. 工具和实用工具组件
 

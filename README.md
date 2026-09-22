@@ -12,11 +12,16 @@ OrzEmbed 是一个专注于 RISC-V 嵌入式开发的项目，主要围绕 ESP32
 
 ![ESP32-C6-LCD-1.47](/images/ESP32-C6-LCD-1.47.png)
 
-- ESP32-C6FH4 芯片（RISC-V 架构）
-- 1.47 英寸 LCD 显示屏
-- Micro SD 卡座
-- 贴片陶瓷天线
-- BOOT 和 RESET 按键
+- **ESP32-C6FH4** 芯片(RISC-V RV32IMAC,160MHz,512KB SRAM,4MB flash)
+- **1.47 英寸 LCD**(ST7789,172×320,SPI)
+- **Micro SD 卡座**(SPI,与 LCD 共总线)
+- **板载 WS2812 RGB 灯**(GPIO8)
+- 贴片陶瓷天线(2.4GHz)
+- BOOT / RESET 按键
+- 内置 **USB-Serial-JTAG**(烧录 + 串口 + JTAG 调试,即 `/dev/cu.usbmodem*`)
+
+> ⚠️ **本板已知硬件问题:射频衰减严重** —— 板载陶瓷天线/匹配网络异常,导致 **WiFi 与 BLE 空口几乎不可用**(衰减约 55~60dB);其余功能(LCD / SD / GPIO / RGB / NVS 等)均正常。
+> 定位与排查方法详见 [板级自检记录](./docs/ESP32-C6-LCD-1.47-BRINGUP.md)。
 
 ## 技术栈
 
@@ -63,9 +68,19 @@ OrzEmbed/
 > `EXTRA_COMPONENT_DIRS` 引用仓库根的共享组件(`components/`);引脚、LCD 驱动、
 > 字库、按键逻辑只维护一份,新增应用直接复用。字库为生成物,由 `scripts/gen-*.py` 输出。
 
-## 多语言项目示例
+## 示例工程
 
-项目包含三种编程语言的 ESP32-C6 开发示例：
+仓库包含 **5 个可独立编译/烧录的工程**:
+
+| 工程 | 语言/框架 | 说明 | 依赖共享组件 |
+|------|-----------|------|--------------|
+| [`project/c`](./project/c/) | C / ESP-IDF | 基础示例(日志 / Hello World) | — |
+| [`project/hwtest`](./project/hwtest/) | C / ESP-IDF | 板级自动自检(屏上 PASS/FAIL 面板 + 引导探针) | orz_lcd / orz_rgb |
+| [`project/timer`](./project/timer/) | C / ESP-IDF | 独立计时器(番茄钟 / 倒计时 / 秒表,4 键 4 灯,中文界面) | orz_lcd / orz_rgb / orz_input |
+| [`project/rust`](./project/rust/) | Rust / esp-idf-svc | GPIO 翻转 + 日志 | — |
+| [`project/swift`](./project/swift/) | Embedded Swift / idf_swift | GPIO 翻转示例 | — |
+
+下面按逐个工程说明:
 
 ### 1. C 语言项目 (`project/c/`)
 - **项目配置**：`CMakeLists.txt` - ESP-IDF 项目配置文件
@@ -95,13 +110,29 @@ OrzEmbed/
 
 ### 5. 独立计时器应用 (`project/timer/`)
 - **插电即运行、不依赖网络/主机**的桌面计时器:番茄钟 / 倒计时 / 秒表;
-- 仅用板载 **BOOT 单键**操作:单击=开始/暂停、双击=切模式、长按=复位(倒计时停止时长按=调整分钟);
-- 屏上大字 + 进度条 + 阶段信息;状态用 **RGB 灯**提示(运行/暂停/结束闪烁);设置存 flash 断电不丢;
+- **4 个外接开关**(GP0~GP3)操作,**4 个绿色 LED**(GP18/19/20/23)提示,**板载 RGB** 指示状态;
+- 界面为**简体中文**(内置 36 汉字的 16×16 点阵字库);
 - 构建烧录(复用通用脚本):
 
 ```bash
 ./scripts/esp32c6-build-flash.sh /dev/cu.usbmodemXXXX --project project/timer
 ```
+
+| 键 | 引脚 | 短按 | 长按 |
+|----|------|------|------|
+| K1 | GP0 | 开始 / 暂停 | 复位 |
+| K2 | GP1 | 切换模式(番茄钟→倒计时→秒表) | — |
+| K3 | GP2 | −1 分钟(倒计时 / 专注时长) | — |
+| K4 | GP3 | +1 分钟 | — |
+
+| 状态 | 4 个 LED |
+|------|-----------|
+| 就绪 | 慢速跑马灯 |
+| 运行 | 剩余时间进度条(4→0) |
+| 暂停 | 进度条慢闪 |
+| 结束 | 四灯快闪 |
+
+> 时长设置存 flash(NVS)断电不丢;详见 [`project/timer`](./project/timer/)。
 
 ## 使用方法
 
@@ -111,9 +142,9 @@ OrzEmbed/
 ### C 项目
 ```bash
 ./scripts/esp32c6-build-flash.sh            # 默认构建烧录 project/c
-# 或手动执行：
+# 或手动执行:
 source ./esp-idf/export.sh
-cd project/c && idf.py set-target esp32c6 && idf.py build && idf.py flash monitor
+cd project/c && idf.py build && idf.py -p /dev/cu.usbmodemXXXX flash monitor
 ```
 
 ### Swift 项目
@@ -122,7 +153,7 @@ Embedded Swift 目前**不在稳定版 Swift 中**，需要官方**开发版快�
 ```bash
 # 安装快照工具链并使其位于 ~/Library/Developer/Toolchains/swift-latest.xctoolchain
 # （首选用 swiftly install main-snapshot；也可手动安装官方 *-osx.pkg）
-./scripts/esp32c6-swift-build-flash.sh /dev/tty.usbmodemXXXX
+./scripts/esp32c6-swift-build-flash.sh /dev/cu.usbmodemXXXX
 ```
 工程通过 ESP-IDF 组件 `espressif/idf_swift` 把 Swift 编译进 `idf.py build`。
 
@@ -132,7 +163,7 @@ Embedded Swift 目前**不在稳定版 Swift 中**，需要官方**开发版快�
 rustup toolchain install nightly --component rust-src
 cargo install ldproxy --locked
 cargo install cargo-espflash --locked          # 仅烧录需要
-./scripts/esp32c6-rust-build-flash.sh /dev/tty.usbmodemXXXX
+./scripts/esp32c6-rust-build-flash.sh /dev/cu.usbmodemXXXX
 ```
 
 ## 开发流程
@@ -152,13 +183,13 @@ cargo install cargo-espflash --locked          # 仅烧录需要
 
 ```bash
 # C:构建、烧录并监控(默认 project/c)
-./scripts/esp32c6-build-flash.sh [/dev/tty.usbmodemXXXX]
+./scripts/esp32c6-build-flash.sh [/dev/cu.usbmodemXXXX]
 
 # Rust:构建(并可选烧录)project/rust
-./scripts/esp32c6-rust-build-flash.sh [/dev/tty.usbmodemXXXX]
+./scripts/esp32c6-rust-build-flash.sh [/dev/cu.usbmodemXXXX]
 
 # Swift:构建并烧录 project/swift
-./scripts/esp32c6-swift-build-flash.sh [/dev/tty.usbmodemXXXX]
+./scripts/esp32c6-swift-build-flash.sh [/dev/cu.usbmodemXXXX]
 
 # 板级自动自检(编译+烧录 project/hwtest 并解析结果)
 ./scripts/esp32c6-hwtest.sh [/dev/cu.usbmodemXXXX] [--probe]

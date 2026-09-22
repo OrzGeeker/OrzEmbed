@@ -3,7 +3,7 @@
 #
 # 构建、烧录并监视 C 工程(ESP-IDF)
 #
-#   ./scripts/esp32c6-build-flash.sh [/dev/tty.usbmodemXXXX] [--project <dir>]
+#   ./scripts/esp32c6-build-flash.sh [/dev/cu.usbmodemXXXX] [--project <dir>]
 #
 # 说明:
 #   - 若当前 shell 未加载 ESP-IDF 环境(IDF_PATH 未设置),会自动 source esp-idf/export.sh。

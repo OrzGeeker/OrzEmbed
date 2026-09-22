@@ -3,7 +3,7 @@
 #
 # 一键构建(并可选烧录)Rust 工程
 #
-#   ./scripts/esp32c6-rust-build-flash.sh [/dev/tty.usbmodemXXXX]
+#   ./scripts/esp32c6-rust-build-flash.sh [/dev/cu.usbmodemXXXX]
 #
 # 说明:
 #   - RISC-V 目标使用上游 nightly + build-std(见 project/rust/rust-toolchain.toml 与 .cargo/config.toml)。
@@ -47,7 +47,7 @@ popd >/dev/null
 
 if [[ -z "${PORT}" ]]; then
   echo "[2/2] 未提供串口,跳过烧录。"
-  echo "      用法: $0 /dev/tty.usbmodemXXXX"
+  echo "      用法: $0 /dev/cu.usbmodemXXXX"
   exit 0
 fi
 

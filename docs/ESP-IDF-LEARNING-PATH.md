@@ -2,6 +2,20 @@
 
 本文档基于ESP-IDF-ANALYSIS.md中的学习路径建议，结合esp-idf/examples目录中的示例工程，为新手提供一份从易到难的学习顺序指南。通过按照本文档的顺序学习示例工程，您可以快速入门ESP32-C6开发，掌握ESP-IDF的核心功能。
 
+> **适用范围**:示例路径已按仓库内 **ESP-IDF v6.1** 子模块校验存在。部分示例依赖额外硬件(如 `esp_psram`/`xip_from_psram` 需 PSRAM,**ESP32-C6 无 PSRAM 不适用**;Wi-Fi/以太网示例在本板因射频硬件问题不可用)。
+
+## 路径0:本项目自带工程(推荐先跑)
+
+在刷官方示例前,建议先跑通仓库自带、已适配本板的工程:
+
+| 工程 | 说明 | 命令 |
+|------|------|------|
+| `project/c` | 最小 ESP-IDF 工程(日志 / Hello World) | `./scripts/esp32c6-build-flash.sh` |
+| `project/hwtest` | 板级自动自检(屏上 PASS/FAIL) | `./scripts/esp32c6-hwtest.sh` |
+| `project/timer` | 独立计时器(番茄钟/倒计时/秒表) | `./scripts/esp32c6-build-flash.sh --project project/timer` |
+
+它们演示了本项目的**工程结构约定**(共享组件 `components/`、`EXTRA_COMPONENT_DIRS`),参见 [README](../README.md)。
+
 ## 学习路径概览
 
 ### 路径1：嵌入式系统开发
